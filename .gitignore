@@ -25,6 +25,9 @@ CLAUDE.md
 SKILLS.md
 AGENTS.md
 WORKFLOWS.md
+DEV.md
+TODO.md
+
 .venv/
 .vscode/
 .env
@@ -36,3 +39,4 @@ logs/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+spec/
