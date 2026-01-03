@@ -19,3 +19,20 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+.claude
+CLAUDE.md
+SKILLS.md
+AGENTS.md
+WORKFLOWS.md
+.venv/
+.vscode/
+.env
+.env.*.local
+.env.local
+.envrc
+*.log
+logs/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
