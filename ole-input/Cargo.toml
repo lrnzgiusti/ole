@@ -1,0 +1,10 @@
+[package]
+name = "ole-input"
+version.workspace = true
+edition.workspace = true
+description = "Input handling for OLE - vim-style modal keyboard"
+
+[dependencies]
+ole-audio.workspace = true
+crossterm.workspace = true
+thiserror.workspace = true

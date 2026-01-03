@@ -1,0 +1,16 @@
+[package]
+name = "ole-tui"
+version.workspace = true
+edition.workspace = true
+description = "Terminal UI for OLE - widgets, themes, layout"
+
+[dependencies]
+ole-analysis.workspace = true
+ole-audio.workspace = true
+ole-input.workspace = true
+ole-library.workspace = true
+
+ratatui.workspace = true
+crossterm.workspace = true
+crossbeam-channel.workspace = true
+ringbuf.workspace = true

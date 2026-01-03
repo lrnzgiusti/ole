@@ -1,0 +1,17 @@
+[package]
+name = "ole-audio"
+version.workspace = true
+edition.workspace = true
+description = "Audio engine for OLE - decks, mixer, effects"
+
+[dependencies]
+ole-analysis.workspace = true
+
+cpal.workspace = true
+symphonia.workspace = true
+rubato.workspace = true
+crossbeam-channel.workspace = true
+ringbuf.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

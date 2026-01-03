@@ -1,0 +1,14 @@
+[package]
+name = "ole-library"
+version.workspace = true
+edition.workspace = true
+description = "Track library for OLE - loading, metadata, cache"
+
+[dependencies]
+symphonia.workspace = true
+rubato.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rusqlite.workspace = true
+ole-analysis.workspace = true
+crossbeam-channel.workspace = true
