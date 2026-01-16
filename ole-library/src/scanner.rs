@@ -3,7 +3,7 @@
 //! Scans directories for audio files, analyzes BPM and key using multiple
 //! threads, and stores results in the cache.
 
-use crate::cache::{AnalysisCache, CachedAnalysis, CacheError};
+use crate::cache::{AnalysisCache, CacheError, CachedAnalysis};
 use crate::loader::{LoadError, TrackLoader};
 use crossbeam_channel::{self, Receiver, Sender};
 use ole_analysis::{BeatGridAnalyzer, CamelotKey, KeyAnalyzer};
@@ -215,22 +215,20 @@ impl LibraryScanner {
         all_tracks.extend(new_analyses.iter().cloned());
 
         // Sort by key, then BPM
-        all_tracks.sort_by(|a, b| {
-            match (&a.key, &b.key) {
-                (Some(ka), Some(kb)) => ka.cmp(kb).then_with(|| {
-                    a.bpm
-                        .unwrap_or(0.0)
-                        .partial_cmp(&b.bpm.unwrap_or(0.0))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a
-                    .bpm
+        all_tracks.sort_by(|a, b| match (&a.key, &b.key) {
+            (Some(ka), Some(kb)) => ka.cmp(kb).then_with(|| {
+                a.bpm
                     .unwrap_or(0.0)
                     .partial_cmp(&b.bpm.unwrap_or(0.0))
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            }
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a
+                .bpm
+                .unwrap_or(0.0)
+                .partial_cmp(&b.bpm.unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal),
         });
 
         if let Some(ref tx) = progress_tx {
@@ -255,7 +253,10 @@ impl LibraryScanner {
     pub fn scan_async(
         &self,
         config: ScanConfig,
-    ) -> (Receiver<ScanProgress>, JoinHandle<Result<ScanResult, ScanError>>) {
+    ) -> (
+        Receiver<ScanProgress>,
+        JoinHandle<Result<ScanResult, ScanError>>,
+    ) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let cache = Arc::clone(&self.cache);
 
@@ -296,7 +297,10 @@ impl LibraryScanner {
     }
 
     /// Partition files into cached (with analysis) and uncached
-    fn partition_by_cache(&self, files: &[PathBuf]) -> (Vec<(PathBuf, CachedAnalysis)>, Vec<PathBuf>) {
+    fn partition_by_cache(
+        &self,
+        files: &[PathBuf],
+    ) -> (Vec<(PathBuf, CachedAnalysis)>, Vec<PathBuf>) {
         let mut cached = Vec::new();
         let mut uncached = Vec::new();
 
@@ -340,7 +344,9 @@ impl LibraryScanner {
         let thread_count = max_threads.min(file_count).max(1);
 
         // Shared state for work distribution
-        let files = Arc::new(Mutex::new(files.into_iter().enumerate().collect::<Vec<_>>()));
+        let files = Arc::new(Mutex::new(
+            files.into_iter().enumerate().collect::<Vec<_>>(),
+        ));
         let results: Arc<Mutex<Vec<CachedAnalysis>>> = Arc::new(Mutex::new(Vec::new()));
         let failed_count = Arc::new(Mutex::new(0usize));
         let cache = Arc::clone(&self.cache);

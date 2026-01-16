@@ -99,11 +99,11 @@ pub struct Reverb {
     allpass_r: [AllpassFilter; 4],
 
     // Parameters
-    room_size: f32,  // 0.0 - 1.0
-    damping: f32,    // 0.0 - 1.0
-    wet: f32,        // 0.0 - 1.0
-    dry: f32,        // 0.0 - 1.0
-    width: f32,      // Stereo width 0.0 - 1.0
+    room_size: f32, // 0.0 - 1.0
+    damping: f32,   // 0.0 - 1.0
+    wet: f32,       // 0.0 - 1.0
+    dry: f32,       // 0.0 - 1.0
+    width: f32,     // Stereo width 0.0 - 1.0
 
     // Current level preset (1-5)
     level: u8,
@@ -123,9 +123,8 @@ impl Reverb {
         let scale = sample_rate as f32 / 44100.0;
 
         // Create left channel filters
-        let comb_l = std::array::from_fn(|i| {
-            CombFilter::new((COMB_TUNINGS[i] as f32 * scale) as usize)
-        });
+        let comb_l =
+            std::array::from_fn(|i| CombFilter::new((COMB_TUNINGS[i] as f32 * scale) as usize));
         let allpass_l = std::array::from_fn(|i| {
             AllpassFilter::new((ALLPASS_TUNINGS[i] as f32 * scale) as usize)
         });
@@ -226,11 +225,11 @@ impl Reverb {
 
         // Softer presets with more damping and less wet signal
         let (room_size, damping, wet) = match level {
-            1 => (0.3, 0.7, 0.08),   // Small room - very subtle
-            2 => (0.45, 0.6, 0.12),  // Medium room - light
-            3 => (0.6, 0.5, 0.16),   // Large room - moderate
-            4 => (0.75, 0.4, 0.20),  // Hall - spacious
-            5 => (0.85, 0.3, 0.25),  // Cathedral - lush
+            1 => (0.3, 0.7, 0.08),  // Small room - very subtle
+            2 => (0.45, 0.6, 0.12), // Medium room - light
+            3 => (0.6, 0.5, 0.16),  // Large room - moderate
+            4 => (0.75, 0.4, 0.20), // Hall - spacious
+            5 => (0.85, 0.3, 0.25), // Cathedral - lush
             _ => (0.5, 0.5, 0.15),
         };
 

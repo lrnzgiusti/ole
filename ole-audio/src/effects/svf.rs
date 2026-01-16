@@ -28,8 +28,8 @@ pub struct StateVariableFilter {
     sample_rate: f32,
 
     // Parameters
-    cutoff: f32,        // Hz (20-20000)
-    resonance: f32,     // 0.0-1.0 (Q from 0.5 to 20)
+    cutoff: f32,    // Hz (20-20000)
+    resonance: f32, // 0.0-1.0 (Q from 0.5 to 20)
     output_type: SvfOutputType,
 
     // Filter state (stereo)

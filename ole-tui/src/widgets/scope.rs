@@ -1,5 +1,6 @@
 //! Oscilloscope widget - classic CRT waveform visualization
 
+use crate::theme::Theme;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -7,7 +8,6 @@ use ratatui::{
     text::Span,
     widgets::{Block, Borders, Widget},
 };
-use crate::theme::Theme;
 
 /// Oscilloscope visualization mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -30,11 +30,7 @@ pub struct ScopeWidget<'a> {
 }
 
 impl<'a> ScopeWidget<'a> {
-    pub fn new(
-        samples_a: &'a [f32],
-        samples_b: &'a [f32],
-        theme: &'a Theme,
-    ) -> Self {
+    pub fn new(samples_a: &'a [f32], samples_b: &'a [f32], theme: &'a Theme) -> Self {
         Self {
             samples_a,
             samples_b,
@@ -194,8 +190,10 @@ impl<'a> ScopeWidget<'a> {
                 let px = inner.x + (x as usize).min(width - 1) as u16;
                 let py = inner.y + (y as usize).min(height - 1) as u16;
 
-                if px >= inner.x && px < inner.x + inner.width
-                    && py >= inner.y && py < inner.y + inner.height
+                if px >= inner.x
+                    && px < inner.x + inner.width
+                    && py >= inner.y
+                    && py < inner.y + inner.height
                 {
                     buf[(px, py)].set_char('●').set_style(style);
                 }

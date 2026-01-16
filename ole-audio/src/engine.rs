@@ -1,22 +1,39 @@
 //! Audio engine - orchestrates decks, mixer, and effects
 
 use crate::deck::{Deck, DeckState};
+use crate::effects::{
+    Delay, DelayModulation, Effect, Filter, FilterMode, FilterType, LadderFilter, Reverb,
+    StateVariableFilter, SvfOutputType,
+};
 use crate::mixer::Mixer;
-use crate::effects::{Filter, FilterType, Delay, DelayModulation, Reverb, Effect, FilterMode, LadderFilter, StateVariableFilter, SvfOutputType};
+use crate::timestretcher::{FftSize, PhaseVocoder};
 use crate::vinyl::{VinylEmulator, VinylPreset};
-use crate::timestretcher::{PhaseVocoder, FftSize};
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use ole_analysis::EnhancedWaveform;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Commands sent to the audio engine
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
     // Deck commands (samples, sample_rate, name, waveform_overview, enhanced_waveform, key)
     // Using Arc to avoid copying large sample data through channels
-    LoadDeckA(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>, Option<String>),
-    LoadDeckB(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>, Option<String>),
+    LoadDeckA(
+        Arc<Vec<f32>>,
+        u32,
+        Option<String>,
+        Arc<Vec<f32>>,
+        Arc<EnhancedWaveform>,
+        Option<String>,
+    ),
+    LoadDeckB(
+        Arc<Vec<f32>>,
+        u32,
+        Option<String>,
+        Arc<Vec<f32>>,
+        Arc<EnhancedWaveform>,
+        Option<String>,
+    ),
     PlayA,
     PlayB,
     PauseA,
@@ -29,11 +46,11 @@ pub enum AudioCommand {
     SeekB(f64),
     NudgeA(f64),
     NudgeB(f64),
-    BeatjumpA(i32),   // Jump by N beats
+    BeatjumpA(i32), // Jump by N beats
     BeatjumpB(i32),
-    SetCueA(u8),      // Set cue point 1-4
+    SetCueA(u8), // Set cue point 1-4
     SetCueB(u8),
-    JumpCueA(u8),     // Jump to cue point 1-4
+    JumpCueA(u8), // Jump to cue point 1-4
     JumpCueB(u8),
     SetTempoA(f32),
     SetTempoB(f32),
@@ -87,7 +104,7 @@ pub enum AudioCommand {
     SetFilterModeB(FilterMode),
     SetFilterResonanceA(f32),
     SetFilterResonanceB(f32),
-    SetFilterDriveA(f32),  // Ladder filter only
+    SetFilterDriveA(f32), // Ladder filter only
     SetFilterDriveB(f32),
 
     // Vinyl emulation
@@ -95,17 +112,17 @@ pub enum AudioCommand {
     ToggleVinylB,
     SetVinylPresetA(VinylPreset),
     SetVinylPresetB(VinylPreset),
-    SetVinylWowA(f32),      // 0.0-1.0
+    SetVinylWowA(f32), // 0.0-1.0
     SetVinylWowB(f32),
-    SetVinylNoiseA(f32),    // 0.0-1.0
+    SetVinylNoiseA(f32), // 0.0-1.0
     SetVinylNoiseB(f32),
-    SetVinylWarmthA(f32),   // 0.0-1.0
+    SetVinylWarmthA(f32), // 0.0-1.0
     SetVinylWarmthB(f32),
 
     // Time stretching (phase vocoder)
     ToggleTimeStretchA,
     ToggleTimeStretchB,
-    SetTimeStretchRatioA(f32),  // 0.25-4.0
+    SetTimeStretchRatioA(f32), // 0.25-4.0
     SetTimeStretchRatioB(f32),
 
     // Delay modulation
@@ -258,28 +275,36 @@ impl EngineState {
     /// Lookup table for filter level (1-10) to cutoff frequency in Hz
     /// Index 0 is default, indices 1-10 map to levels 1-10
     const FILTER_LEVEL_CUTOFF: [f32; 11] = [
-        1000.0,  // default (index 0)
-        200.0, 400.0, 600.0, 1000.0, 2000.0,  // levels 1-5
-        4000.0, 6000.0, 10000.0, 15000.0, 20000.0,  // levels 6-10
+        1000.0, // default (index 0)
+        200.0, 400.0, 600.0, 1000.0, 2000.0, // levels 1-5
+        4000.0, 6000.0, 10000.0, 15000.0, 20000.0, // levels 6-10
     ];
 
     /// Map delay level (1-5) to delay time in ms
     #[inline]
     fn delay_level_to_ms(level: u8) -> f32 {
-        Self::DELAY_LEVEL_MS.get(level as usize).copied().unwrap_or(250.0)
+        Self::DELAY_LEVEL_MS
+            .get(level as usize)
+            .copied()
+            .unwrap_or(250.0)
     }
 
     /// Map filter level (1-10) to cutoff frequency in Hz
     #[inline]
     fn filter_level_to_cutoff(level: u8) -> f32 {
-        Self::FILTER_LEVEL_CUTOFF.get(level as usize).copied().unwrap_or(1000.0)
+        Self::FILTER_LEVEL_CUTOFF
+            .get(level as usize)
+            .copied()
+            .unwrap_or(1000.0)
     }
 
     /// Process a command
     pub fn handle_command(&mut self, cmd: AudioCommand) {
         match cmd {
             // Deck A commands
-            AudioCommand::LoadDeckA(samples, sr, name, waveform, enhanced, key) => self.deck_a.load(samples, sr, name, waveform, enhanced, key),
+            AudioCommand::LoadDeckA(samples, sr, name, waveform, enhanced, key) => {
+                self.deck_a.load(samples, sr, name, waveform, enhanced, key)
+            }
             AudioCommand::PlayA => self.deck_a.play(),
             AudioCommand::PauseA => self.deck_a.pause(),
             AudioCommand::StopA => self.deck_a.stop(),
@@ -295,7 +320,9 @@ impl EngineState {
             AudioCommand::AdjustGainA(delta) => self.deck_a.adjust_gain(delta),
 
             // Deck B commands
-            AudioCommand::LoadDeckB(samples, sr, name, waveform, enhanced, key) => self.deck_b.load(samples, sr, name, waveform, enhanced, key),
+            AudioCommand::LoadDeckB(samples, sr, name, waveform, enhanced, key) => {
+                self.deck_b.load(samples, sr, name, waveform, enhanced, key)
+            }
             AudioCommand::PlayB => self.deck_b.play(),
             AudioCommand::PauseB => self.deck_b.pause(),
             AudioCommand::StopB => self.deck_b.stop(),
@@ -476,7 +503,8 @@ impl EngineState {
                     self.filter_a_level = 0;
                 } else {
                     self.filter_a.set_type(filter_type);
-                    self.filter_a.set_cutoff(Self::filter_level_to_cutoff(level));
+                    self.filter_a
+                        .set_cutoff(Self::filter_level_to_cutoff(level));
                     self.filter_a.set_enabled(true);
                     self.filter_a_level = level;
                 }
@@ -487,7 +515,8 @@ impl EngineState {
                     self.filter_b_level = 0;
                 } else {
                     self.filter_b.set_type(filter_type);
-                    self.filter_b.set_cutoff(Self::filter_level_to_cutoff(level));
+                    self.filter_b
+                        .set_cutoff(Self::filter_level_to_cutoff(level));
                     self.filter_b.set_enabled(true);
                     self.filter_b_level = level;
                 }
@@ -691,7 +720,8 @@ impl EngineState {
     /// 3. Uses smooth transition to avoid jarring jumps
     fn smart_sync_b_to_a(&mut self) {
         // Get beat grids from both decks
-        let (source_grid, source_phase) = match (self.deck_a.beat_grid(), self.deck_a.beat_phase()) {
+        let (source_grid, source_phase) = match (self.deck_a.beat_grid(), self.deck_a.beat_phase())
+        {
             (Some(g), Some(p)) => (g, p),
             _ => {
                 // Fallback to tempo-only sync if no beat grid
@@ -715,17 +745,22 @@ impl EngineState {
         let new_tempo = (source_effective_bpm / target_original_bpm).clamp(0.5, 2.0);
 
         // Step 2: Calculate phase offset needed to align beats
-        let phase_offset = self.deck_b.phase_offset_to_align(source_phase).unwrap_or(0.0);
+        let phase_offset = self
+            .deck_b
+            .phase_offset_to_align(source_phase)
+            .unwrap_or(0.0);
 
         // Step 3: Start smooth transition (~500ms at 44.1kHz)
         let transition_duration = (self.sample_rate as f64 * 0.5) as u64;
-        self.deck_b.start_sync_transition(new_tempo, phase_offset, transition_duration);
+        self.deck_b
+            .start_sync_transition(new_tempo, phase_offset, transition_duration);
     }
 
     /// Smart sync: sync Deck A's tempo and phase to Deck B
     fn smart_sync_a_to_b(&mut self) {
         // Get beat grids from both decks
-        let (source_grid, source_phase) = match (self.deck_b.beat_grid(), self.deck_b.beat_phase()) {
+        let (source_grid, source_phase) = match (self.deck_b.beat_grid(), self.deck_b.beat_phase())
+        {
             (Some(g), Some(p)) => (g, p),
             _ => {
                 self.tempo_only_sync_a_to_b();
@@ -747,17 +782,27 @@ impl EngineState {
         let new_tempo = (source_effective_bpm / target_original_bpm).clamp(0.5, 2.0);
 
         // Calculate phase offset
-        let phase_offset = self.deck_a.phase_offset_to_align(source_phase).unwrap_or(0.0);
+        let phase_offset = self
+            .deck_a
+            .phase_offset_to_align(source_phase)
+            .unwrap_or(0.0);
 
         // Start smooth transition
         let transition_duration = (self.sample_rate as f64 * 0.5) as u64;
-        self.deck_a.start_sync_transition(new_tempo, phase_offset, transition_duration);
+        self.deck_a
+            .start_sync_transition(new_tempo, phase_offset, transition_duration);
     }
 
     /// Fallback tempo-only sync (no phase alignment)
     fn tempo_only_sync_b_to_a(&mut self) {
-        if let (Some(bpm_a), Some(_bpm_b)) = (self.deck_a.current_bpm(), self.deck_b.current_bpm()) {
-            if let Some(original_b) = self.deck_b.state().bpm.map(|b| b / self.deck_b.state().tempo) {
+        if let (Some(bpm_a), Some(_bpm_b)) = (self.deck_a.current_bpm(), self.deck_b.current_bpm())
+        {
+            if let Some(original_b) = self
+                .deck_b
+                .state()
+                .bpm
+                .map(|b| b / self.deck_b.state().tempo)
+            {
                 let new_tempo = bpm_a / original_b;
                 self.deck_b.set_tempo(new_tempo);
             }
@@ -766,8 +811,14 @@ impl EngineState {
 
     /// Fallback tempo-only sync (no phase alignment)
     fn tempo_only_sync_a_to_b(&mut self) {
-        if let (Some(_bpm_a), Some(bpm_b)) = (self.deck_a.current_bpm(), self.deck_b.current_bpm()) {
-            if let Some(original_a) = self.deck_a.state().bpm.map(|b| b / self.deck_a.state().tempo) {
+        if let (Some(_bpm_a), Some(bpm_b)) = (self.deck_a.current_bpm(), self.deck_b.current_bpm())
+        {
+            if let Some(original_a) = self
+                .deck_a
+                .state()
+                .bpm
+                .map(|b| b / self.deck_a.state().tempo)
+            {
                 let new_tempo = bpm_b / original_a;
                 self.deck_a.set_tempo(new_tempo);
             }
@@ -855,7 +906,12 @@ pub struct AudioEngine {
 impl AudioEngine {
     /// Create channels for engine communication
     /// Buffer size of 1024 provides headroom for command bursts without saturation
-    pub fn create_channels() -> (Sender<AudioCommand>, Receiver<AudioCommand>, Sender<AudioEvent>, Receiver<AudioEvent>) {
+    pub fn create_channels() -> (
+        Sender<AudioCommand>,
+        Receiver<AudioCommand>,
+        Sender<AudioEvent>,
+        Receiver<AudioEvent>,
+    ) {
         let (cmd_tx, cmd_rx) = bounded(1024);
         let (evt_tx, evt_rx) = bounded(1024);
         (cmd_tx, cmd_rx, evt_tx, evt_rx)

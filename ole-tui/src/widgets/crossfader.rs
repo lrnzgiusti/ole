@@ -1,12 +1,12 @@
 //! Crossfader widget - visual mixer control
 
+use crate::theme::Theme;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     text::Span,
     widgets::{Block, Borders, Widget},
 };
-use crate::theme::Theme;
 
 /// Widget for displaying the crossfader
 pub struct CrossfaderWidget<'a> {
@@ -53,10 +53,12 @@ impl Widget for CrossfaderWidget<'_> {
 
         // Row 0: BPM display with difference (if we have BPM data)
         if inner.height >= 1 {
-            let bpm_a_str = self.bpm_a
+            let bpm_a_str = self
+                .bpm_a
                 .map(|b| format!("{:.1}", b))
                 .unwrap_or_else(|| "---".to_string());
-            let bpm_b_str = self.bpm_b
+            let bpm_b_str = self
+                .bpm_b
                 .map(|b| format!("{:.1}", b))
                 .unwrap_or_else(|| "---".to_string());
 

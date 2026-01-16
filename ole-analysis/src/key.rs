@@ -107,7 +107,10 @@ impl KeyAnalyzer {
     ///
     /// Each bin is mapped to its closest pitch class (0-11, where 0=C).
     /// Returns the mapping and weights for each bin.
-    fn compute_pitch_class_mapping(fft_size: usize, sample_rate: u32) -> (Vec<Option<u8>>, Vec<f32>) {
+    fn compute_pitch_class_mapping(
+        fft_size: usize,
+        sample_rate: u32,
+    ) -> (Vec<Option<u8>>, Vec<f32>) {
         let nyquist = sample_rate as f32 / 2.0;
         let bin_freq = |bin: usize| -> f32 { bin as f32 * sample_rate as f32 / fft_size as f32 };
 
@@ -330,13 +333,18 @@ mod tests {
                 break;
             }
         }
-        assert!(has_mappings, "Should have at least some pitch class mappings");
+        assert!(
+            has_mappings,
+            "Should have at least some pitch class mappings"
+        );
     }
 
     #[test]
     fn test_rotate_chroma() {
         let analyzer = KeyAnalyzer::new(44100);
-        let chroma = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let chroma = [
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
 
         // Rotate by 0 should give same array
         let rotated = analyzer.rotate_chroma(&chroma, 0);
@@ -353,7 +361,9 @@ mod tests {
         let analyzer = KeyAnalyzer::new(44100);
 
         // Perfect correlation with self
-        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let a = [
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
         let corr = analyzer.correlate(&a, &a);
         assert!((corr - 1.0).abs() < 0.001, "Self-correlation should be 1.0");
     }
@@ -363,10 +373,17 @@ mod tests {
         let analyzer = KeyAnalyzer::new(44100);
 
         // Inverse correlation
-        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
-        let b = [12.0, 11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+        let a = [
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let b = [
+            12.0, 11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0,
+        ];
         let corr = analyzer.correlate(&a, &b);
-        assert!(corr < 0.0, "Inverse arrays should have negative correlation");
+        assert!(
+            corr < 0.0,
+            "Inverse arrays should have negative correlation"
+        );
     }
 
     #[test]

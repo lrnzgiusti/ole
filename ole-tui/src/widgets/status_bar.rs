@@ -1,5 +1,7 @@
 //! Status bar widget - mode indicator and command line
 
+use crate::app::MessageType;
+use crate::theme::Theme;
 use ole_input::Mode;
 use ratatui::{
     buffer::Buffer,
@@ -8,8 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
-use crate::theme::Theme;
-use crate::app::MessageType;
 
 /// Widget for displaying the status bar with mode and command input
 pub struct StatusBarWidget<'a> {
@@ -18,8 +18,8 @@ pub struct StatusBarWidget<'a> {
     message: Option<&'a str>,
     message_type: MessageType,
     theme: &'a Theme,
-    effects_a: Option<String>,  // Effect chain for deck A
-    effects_b: Option<String>,  // Effect chain for deck B
+    effects_a: Option<String>, // Effect chain for deck A
+    effects_b: Option<String>, // Effect chain for deck B
 }
 
 impl<'a> StatusBarWidget<'a> {
@@ -42,8 +42,16 @@ impl<'a> StatusBarWidget<'a> {
     }
 
     pub fn effects(mut self, effects_a: String, effects_b: String) -> Self {
-        self.effects_a = if effects_a.is_empty() { None } else { Some(effects_a) };
-        self.effects_b = if effects_b.is_empty() { None } else { Some(effects_b) };
+        self.effects_a = if effects_a.is_empty() {
+            None
+        } else {
+            Some(effects_a)
+        };
+        self.effects_b = if effects_b.is_empty() {
+            None
+        } else {
+            Some(effects_b)
+        };
         self
     }
 
@@ -205,8 +213,16 @@ impl Widget for HelpWidget<'_> {
                     break;
                 }
 
-                let style = if ch == '║' || ch == '╔' || ch == '╗' || ch == '╚' || ch == '╝'
-                    || ch == '═' || ch == '╠' || ch == '╣' || ch == '─' || ch == '│'
+                let style = if ch == '║'
+                    || ch == '╔'
+                    || ch == '╗'
+                    || ch == '╚'
+                    || ch == '╝'
+                    || ch == '═'
+                    || ch == '╠'
+                    || ch == '╣'
+                    || ch == '─'
+                    || ch == '│'
                 {
                     self.theme.border()
                 } else {

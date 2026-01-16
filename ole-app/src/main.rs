@@ -4,11 +4,13 @@
 
 use std::io::{self, stdout};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crossbeam_channel::Receiver;
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
@@ -19,16 +21,13 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     Terminal,
 };
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam_channel::Receiver;
 
-use ole_audio::{AudioEngine, AudioCommand, AudioEvent, EngineState};
-use ole_input::{InputHandler, Command, DeckId, Direction, EffectType};
+use ole_audio::{AudioCommand, AudioEngine, AudioEvent, EngineState};
+use ole_input::{Command, DeckId, Direction, EffectType, InputHandler};
 use ole_library::{AnalysisCache, LibraryScanner, ScanConfig, ScanProgress, TrackLoader};
 use ole_tui::{
-    App, FocusedPane, LibraryWidget, Theme,
-    DeckWidget, SpectrumWidget, ScopeWidget, CrossfaderWidget, PhaseWidget, StatusBarWidget, HelpWidget,
-    CamelotWheelWidget,
+    App, CamelotWheelWidget, CrossfaderWidget, DeckWidget, FocusedPane, HelpWidget, LibraryWidget,
+    PhaseWidget, ScopeWidget, SpectrumWidget, StatusBarWidget, Theme,
 };
 
 /// Frame rate for UI updates
@@ -91,7 +90,10 @@ fn run_audio_thread(
     let config = match device.default_output_config() {
         Ok(c) => c,
         Err(e) => {
-            let _ = evt_tx.send(AudioEvent::Error(format!("Failed to get audio config: {}", e)));
+            let _ = evt_tx.send(AudioEvent::Error(format!(
+                "Failed to get audio config: {}",
+                e
+            )));
             return;
         }
     };
@@ -143,7 +145,10 @@ fn run_audio_thread(
     let stream = match stream {
         Ok(s) => s,
         Err(e) => {
-            let _ = evt_tx.send(AudioEvent::Error(format!("Failed to create audio stream: {}", e)));
+            let _ = evt_tx.send(AudioEvent::Error(format!(
+                "Failed to create audio stream: {}",
+                e
+            )));
             return;
         }
     };
@@ -200,7 +205,9 @@ fn run_app(
     let mut last_frame = Instant::now();
 
     // Show startup banner
-    app.state.set_message("OLE - Open Live Engine | Press ? for help, / for library, :scan <dir> to scan tracks");
+    app.state.set_message(
+        "OLE - Open Live Engine | Press ? for help, / for library, :scan <dir> to scan tracks",
+    );
 
     loop {
         // Check for shutdown
@@ -222,7 +229,8 @@ fn run_app(
                     ScanProgress::Started { total } => {
                         app.state.library.is_scanning = true;
                         app.state.library.scan_progress = (0, total);
-                        app.state.set_message(format!("Scanning {} files...", total));
+                        app.state
+                            .set_message(format!("Scanning {} files...", total));
                     }
                     ScanProgress::Analyzing { current, total, .. } => {
                         app.state.library.scan_progress = (current, total);
@@ -230,7 +238,11 @@ fn run_app(
                     ScanProgress::Cached { current, total, .. } => {
                         app.state.library.scan_progress = (current, total);
                     }
-                    ScanProgress::Complete { analyzed, cached, failed } => {
+                    ScanProgress::Complete {
+                        analyzed,
+                        cached,
+                        failed,
+                    } => {
                         app.state.library.is_scanning = false;
                         // Load all tracks from scanner
                         if let Some(ref scanner) = scanner {
@@ -294,7 +306,8 @@ fn run_app(
                                 let (rx, _handle) = scanner.scan_async(config);
                                 scan_progress_rx = Some(rx);
                                 app.state.library.is_scanning = true;
-                                app.state.set_message(format!("Starting scan of {}...", path.display()));
+                                app.state
+                                    .set_message(format!("Starting scan of {}...", path.display()));
                             } else {
                                 app.state.set_error("Library cache not available");
                             }
@@ -303,7 +316,14 @@ fn run_app(
                             if let Some(track) = app.state.library.selected_track() {
                                 let path = track.path.clone();
                                 let key = track.key.clone();
-                                load_track_with_key(&mut app, &engine, &track_loader, *deck, &path, key.clone());
+                                load_track_with_key(
+                                    &mut app,
+                                    &engine,
+                                    &track_loader,
+                                    *deck,
+                                    &path,
+                                    key.clone(),
+                                );
                                 // Update current playing key for harmonic highlighting
                                 app.state.library.current_playing_key = key;
                             }
@@ -397,30 +417,54 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
         Command::CenterCrossfader => engine.send(AudioCommand::CenterCrossfader),
 
         // Effects - toggle
-        Command::ToggleEffect(DeckId::A, EffectType::Filter) => engine.send(AudioCommand::ToggleFilterA),
-        Command::ToggleEffect(DeckId::B, EffectType::Filter) => engine.send(AudioCommand::ToggleFilterB),
-        Command::ToggleEffect(DeckId::A, EffectType::Delay) => engine.send(AudioCommand::ToggleDelayA),
-        Command::ToggleEffect(DeckId::B, EffectType::Delay) => engine.send(AudioCommand::ToggleDelayB),
-        Command::ToggleEffect(DeckId::A, EffectType::Reverb) => engine.send(AudioCommand::ToggleReverbA),
-        Command::ToggleEffect(DeckId::B, EffectType::Reverb) => engine.send(AudioCommand::ToggleReverbB),
-        Command::AdjustFilterCutoff(DeckId::A, delta) => engine.send(AudioCommand::AdjustFilterCutoffA(delta)),
-        Command::AdjustFilterCutoff(DeckId::B, delta) => engine.send(AudioCommand::AdjustFilterCutoffB(delta)),
+        Command::ToggleEffect(DeckId::A, EffectType::Filter) => {
+            engine.send(AudioCommand::ToggleFilterA)
+        }
+        Command::ToggleEffect(DeckId::B, EffectType::Filter) => {
+            engine.send(AudioCommand::ToggleFilterB)
+        }
+        Command::ToggleEffect(DeckId::A, EffectType::Delay) => {
+            engine.send(AudioCommand::ToggleDelayA)
+        }
+        Command::ToggleEffect(DeckId::B, EffectType::Delay) => {
+            engine.send(AudioCommand::ToggleDelayB)
+        }
+        Command::ToggleEffect(DeckId::A, EffectType::Reverb) => {
+            engine.send(AudioCommand::ToggleReverbA)
+        }
+        Command::ToggleEffect(DeckId::B, EffectType::Reverb) => {
+            engine.send(AudioCommand::ToggleReverbB)
+        }
+        Command::AdjustFilterCutoff(DeckId::A, delta) => {
+            engine.send(AudioCommand::AdjustFilterCutoffA(delta))
+        }
+        Command::AdjustFilterCutoff(DeckId::B, delta) => {
+            engine.send(AudioCommand::AdjustFilterCutoffB(delta))
+        }
 
         // Effects - preset levels (with feedback)
         Command::SetDelayLevel(deck, level) => {
-            let deck_char = match deck { DeckId::A => 'A', DeckId::B => 'B' };
+            let deck_char = match deck {
+                DeckId::A => 'A',
+                DeckId::B => 'B',
+            };
             match deck {
                 DeckId::A => engine.send(AudioCommand::SetDelayLevelA(level)),
                 DeckId::B => engine.send(AudioCommand::SetDelayLevelB(level)),
             }
             if level == 0 {
-                app.state.set_message(format!("▶ Deck {} DELAY OFF", deck_char));
+                app.state
+                    .set_message(format!("▶ Deck {} DELAY OFF", deck_char));
             } else {
-                app.state.set_message(format!("▶ Deck {} DELAY:{}", deck_char, level));
+                app.state
+                    .set_message(format!("▶ Deck {} DELAY:{}", deck_char, level));
             }
         }
         Command::SetFilterPreset(deck, filter_type, level) => {
-            let deck_char = match deck { DeckId::A => 'A', DeckId::B => 'B' };
+            let deck_char = match deck {
+                DeckId::A => 'A',
+                DeckId::B => 'B',
+            };
             let ft = match filter_type {
                 ole_audio::FilterType::LowPass => "LOW",
                 ole_audio::FilterType::BandPass => "BAND",
@@ -431,21 +475,28 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
                 DeckId::B => engine.send(AudioCommand::SetFilterPresetB(filter_type, level)),
             }
             if level == 0 {
-                app.state.set_message(format!("▶ Deck {} FILTER OFF", deck_char));
+                app.state
+                    .set_message(format!("▶ Deck {} FILTER OFF", deck_char));
             } else {
-                app.state.set_message(format!("▶ Deck {} FILTER:{}:{}", deck_char, ft, level));
+                app.state
+                    .set_message(format!("▶ Deck {} FILTER:{}:{}", deck_char, ft, level));
             }
         }
         Command::SetReverbLevel(deck, level) => {
-            let deck_char = match deck { DeckId::A => 'A', DeckId::B => 'B' };
+            let deck_char = match deck {
+                DeckId::A => 'A',
+                DeckId::B => 'B',
+            };
             match deck {
                 DeckId::A => engine.send(AudioCommand::SetReverbLevelA(level)),
                 DeckId::B => engine.send(AudioCommand::SetReverbLevelB(level)),
             }
             if level == 0 {
-                app.state.set_message(format!("▶ Deck {} REVERB OFF", deck_char));
+                app.state
+                    .set_message(format!("▶ Deck {} REVERB OFF", deck_char));
             } else {
-                app.state.set_message(format!("▶ Deck {} REVERB:{}", deck_char, level));
+                app.state
+                    .set_message(format!("▶ Deck {} REVERB:{}", deck_char, level));
             }
         }
 
@@ -458,18 +509,14 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
         Command::ToggleHelp => app.state.toggle_help(),
         Command::ToggleScope => app.state.toggle_scope(),
         Command::CycleScopeMode => app.state.cycle_scope_mode(),
-        Command::ZoomIn(deck) => {
-            match deck {
-                DeckId::A => app.state.zoom_a = app.state.zoom_a.zoom_in(),
-                DeckId::B => app.state.zoom_b = app.state.zoom_b.zoom_in(),
-            }
-        }
-        Command::ZoomOut(deck) => {
-            match deck {
-                DeckId::A => app.state.zoom_a = app.state.zoom_a.zoom_out(),
-                DeckId::B => app.state.zoom_b = app.state.zoom_b.zoom_out(),
-            }
-        }
+        Command::ZoomIn(deck) => match deck {
+            DeckId::A => app.state.zoom_a = app.state.zoom_a.zoom_in(),
+            DeckId::B => app.state.zoom_b = app.state.zoom_b.zoom_in(),
+        },
+        Command::ZoomOut(deck) => match deck {
+            DeckId::A => app.state.zoom_a = app.state.zoom_a.zoom_out(),
+            DeckId::B => app.state.zoom_b = app.state.zoom_b.zoom_out(),
+        },
         Command::SetTheme(name) => app.state.set_theme(&name),
         Command::CycleFocus => app.state.cycle_focus(),
         Command::Focus(deck) => {
@@ -539,31 +586,102 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
         Command::CycleVinylPreset(_) => {} // TODO: implement cycling
         Command::SetVinylWow(DeckId::A, amount) => engine.send(AudioCommand::SetVinylWowA(amount)),
         Command::SetVinylWow(DeckId::B, amount) => engine.send(AudioCommand::SetVinylWowB(amount)),
-        Command::SetVinylNoise(DeckId::A, amount) => engine.send(AudioCommand::SetVinylNoiseA(amount)),
-        Command::SetVinylNoise(DeckId::B, amount) => engine.send(AudioCommand::SetVinylNoiseB(amount)),
-        Command::SetVinylWarmth(DeckId::A, amount) => engine.send(AudioCommand::SetVinylWarmthA(amount)),
-        Command::SetVinylWarmth(DeckId::B, amount) => engine.send(AudioCommand::SetVinylWarmthB(amount)),
+        Command::SetVinylNoise(DeckId::A, amount) => {
+            engine.send(AudioCommand::SetVinylNoiseA(amount))
+        }
+        Command::SetVinylNoise(DeckId::B, amount) => {
+            engine.send(AudioCommand::SetVinylNoiseB(amount))
+        }
+        Command::SetVinylWarmth(DeckId::A, amount) => {
+            engine.send(AudioCommand::SetVinylWarmthA(amount))
+        }
+        Command::SetVinylWarmth(DeckId::B, amount) => {
+            engine.send(AudioCommand::SetVinylWarmthB(amount))
+        }
 
         // Time stretching commands
         Command::ToggleTimeStretch(DeckId::A) => engine.send(AudioCommand::ToggleTimeStretchA),
         Command::ToggleTimeStretch(DeckId::B) => engine.send(AudioCommand::ToggleTimeStretchB),
-        Command::SetTimeStretchRatio(DeckId::A, ratio) => engine.send(AudioCommand::SetTimeStretchRatioA(ratio)),
-        Command::SetTimeStretchRatio(DeckId::B, ratio) => engine.send(AudioCommand::SetTimeStretchRatioB(ratio)),
+        Command::SetTimeStretchRatio(DeckId::A, ratio) => {
+            engine.send(AudioCommand::SetTimeStretchRatioA(ratio))
+        }
+        Command::SetTimeStretchRatio(DeckId::B, ratio) => {
+            engine.send(AudioCommand::SetTimeStretchRatioB(ratio))
+        }
 
         // Delay modulation commands
-        Command::SetDelayModulation(DeckId::A, mode) => engine.send(AudioCommand::SetDelayModulationA(mode)),
-        Command::SetDelayModulation(DeckId::B, mode) => engine.send(AudioCommand::SetDelayModulationB(mode)),
+        Command::SetDelayModulation(DeckId::A, mode) => {
+            engine.send(AudioCommand::SetDelayModulationA(mode))
+        }
+        Command::SetDelayModulation(DeckId::B, mode) => {
+            engine.send(AudioCommand::SetDelayModulationB(mode))
+        }
         Command::CycleDelayModulation(_) => {} // TODO: implement cycling
 
         // Mode changes (handled by input handler, but we can use them for state)
-        Command::EnterCommandMode | Command::EnterEffectsMode |
-        Command::EnterNormalMode | Command::EnterBrowserMode |
-        Command::Cancel | Command::ExecuteCommand(_) => {}
+        Command::EnterCommandMode
+        | Command::EnterEffectsMode
+        | Command::EnterNormalMode
+        | Command::EnterBrowserMode
+        | Command::Cancel
+        | Command::ExecuteCommand(_) => {}
+
+        // CRT screen effects
+        Command::ToggleCrt => {
+            app.state.crt_effects.toggle_crt();
+            let status = if app.state.crt_effects.crt_enabled {
+                "ON"
+            } else {
+                "OFF"
+            };
+            app.state.set_message(format!("▶ CRT effects {}", status));
+        }
+        Command::ToggleGlow => {
+            app.state.crt_effects.toggle_glow();
+            let status = if app.state.crt_effects.glow_enabled {
+                "ON"
+            } else {
+                "OFF"
+            };
+            app.state.set_message(format!("▶ Phosphor glow {}", status));
+        }
+        Command::ToggleNoise => {
+            app.state.crt_effects.toggle_noise();
+            let status = if app.state.crt_effects.noise_enabled {
+                "ON"
+            } else {
+                "OFF"
+            };
+            app.state.set_message(format!("▶ Static noise {}", status));
+        }
+        Command::ToggleChromatic => {
+            app.state.crt_effects.toggle_chromatic();
+            let status = if app.state.crt_effects.chromatic_enabled {
+                "ON"
+            } else {
+                "OFF"
+            };
+            app.state
+                .set_message(format!("▶ Chromatic aberration {}", status));
+        }
+        Command::CycleCrtIntensity => {
+            app.state.crt_effects.cycle_intensity();
+            let name = app.state.crt_effects.intensity.name();
+            app.state.set_message(format!("▶ CRT intensity: {}", name));
+        }
     }
 }
 
-fn load_track_with_key(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, deck: DeckId, path: &std::path::Path, key: Option<String>) {
-    app.state.set_message(format!("Loading {}...", path.display()));
+fn load_track_with_key(
+    app: &mut App,
+    engine: &AudioEngine,
+    loader: &TrackLoader,
+    deck: DeckId,
+    path: &std::path::Path,
+    key: Option<String>,
+) {
+    app.state
+        .set_message(format!("Loading {}...", path.display()));
 
     match loader.load(path) {
         Ok(track) => {
@@ -578,13 +696,30 @@ fn load_track_with_key(app: &mut App, engine: &AudioEngine, loader: &TrackLoader
             let waveform = Arc::new(track.waveform_overview);
             let enhanced_waveform = Arc::new(track.enhanced_waveform);
             match deck {
-                DeckId::A => engine.send(AudioCommand::LoadDeckA(samples, track.sample_rate, name, waveform, enhanced_waveform, key)),
-                DeckId::B => engine.send(AudioCommand::LoadDeckB(samples, track.sample_rate, name, waveform, enhanced_waveform, key)),
+                DeckId::A => engine.send(AudioCommand::LoadDeckA(
+                    samples,
+                    track.sample_rate,
+                    name,
+                    waveform,
+                    enhanced_waveform,
+                    key,
+                )),
+                DeckId::B => engine.send(AudioCommand::LoadDeckB(
+                    samples,
+                    track.sample_rate,
+                    name,
+                    waveform,
+                    enhanced_waveform,
+                    key,
+                )),
             }
 
             app.state.set_message(format!(
                 "Loaded to deck {}: {}",
-                match deck { DeckId::A => 'A', DeckId::B => 'B' },
+                match deck {
+                    DeckId::A => 'A',
+                    DeckId::B => 'B',
+                },
                 path.file_name().unwrap_or_default().to_string_lossy(),
             ));
         }
@@ -599,28 +734,27 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
     let theme = &app.state.theme;
 
     // Clear with background
-    let block = ratatui::widgets::Block::default()
-        .style(theme.normal());
+    let block = ratatui::widgets::Block::default().style(theme.normal());
     frame.render_widget(block, area);
 
     // Main layout - conditionally include library
     let chunks = if app.state.show_library {
         Layout::vertical([
-            Constraint::Length(1),  // Title
-            Constraint::Min(8),     // Main content (decks)
-            Constraint::Length(8),  // Library
-            Constraint::Length(6),  // Spectrum
-            Constraint::Length(3),  // Phase + Crossfader
-            Constraint::Length(1),  // Status bar
+            Constraint::Length(1), // Title
+            Constraint::Min(8),    // Main content (decks)
+            Constraint::Length(8), // Library
+            Constraint::Length(6), // Spectrum
+            Constraint::Length(3), // Phase + Crossfader
+            Constraint::Length(1), // Status bar
         ])
         .split(area)
     } else {
         Layout::vertical([
-            Constraint::Length(1),  // Title
-            Constraint::Min(10),    // Main content
-            Constraint::Length(6),  // Spectrum
-            Constraint::Length(3),  // Phase + Crossfader
-            Constraint::Length(1),  // Status bar
+            Constraint::Length(1), // Title
+            Constraint::Min(10),   // Main content
+            Constraint::Length(6), // Spectrum
+            Constraint::Length(3), // Phase + Crossfader
+            Constraint::Length(1), // Status bar
         ])
         .split(area)
     };
@@ -629,11 +763,8 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
     render_title(frame, chunks[0], theme);
 
     // Decks (side by side)
-    let deck_chunks = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(chunks[1]);
+    let deck_chunks = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
 
     // Deck A (with sync quality glow and CRT peak hold effects)
     let deck_a = DeckWidget::new(&app.state.deck_a, theme, "DECK A")
@@ -642,7 +773,11 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         .sync_quality(app.state.sync_quality)
         .crt_peak_hold(app.state.crt_effects.vu_peak_a)
         .zoom(app.state.zoom_a)
-        .filter(app.state.filter_a_enabled, app.state.filter_a_type, app.state.filter_a_level)
+        .filter(
+            app.state.filter_a_enabled,
+            app.state.filter_a_type,
+            app.state.filter_a_level,
+        )
         .delay(app.state.delay_a_enabled, app.state.delay_a_level)
         .reverb(app.state.reverb_a_enabled, app.state.reverb_a_level);
     frame.render_widget(deck_a, deck_chunks[0]);
@@ -654,7 +789,11 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         .sync_quality(app.state.sync_quality)
         .crt_peak_hold(app.state.crt_effects.vu_peak_b)
         .zoom(app.state.zoom_b)
-        .filter(app.state.filter_b_enabled, app.state.filter_b_type, app.state.filter_b_level)
+        .filter(
+            app.state.filter_b_enabled,
+            app.state.filter_b_type,
+            app.state.filter_b_level,
+        )
         .delay(app.state.delay_b_enabled, app.state.delay_b_level)
         .reverb(app.state.reverb_b_enabled, app.state.reverb_b_level);
     frame.render_widget(deck_b, deck_chunks[1]);
@@ -680,7 +819,8 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
             app.state.deck_a.scope_samples.as_slice(),
             app.state.deck_b.scope_samples.as_slice(),
             theme,
-        ).mode(app.state.scope_mode);
+        )
+        .mode(app.state.scope_mode);
         frame.render_widget(scope, chunks[spectrum_idx]);
     } else {
         let spectrum = SpectrumWidget::new(
@@ -698,15 +838,25 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
 
     // Phase + Camelot + Crossfader area (split horizontally)
     let mixer_chunks = Layout::horizontal([
-        Constraint::Percentage(30),  // Phase meter
-        Constraint::Percentage(40),  // Camelot wheel
-        Constraint::Percentage(30),  // Crossfader
+        Constraint::Percentage(30), // Phase meter
+        Constraint::Percentage(40), // Camelot wheel
+        Constraint::Percentage(30), // Crossfader
     ])
     .split(chunks[crossfader_idx]);
 
     // Phase meter - shows beat alignment between decks
-    let has_grid_a = app.state.deck_a.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
-    let has_grid_b = app.state.deck_b.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
+    let has_grid_a = app
+        .state
+        .deck_a
+        .beat_grid_info
+        .as_ref()
+        .is_some_and(|g| g.has_grid);
+    let has_grid_b = app
+        .state
+        .deck_b
+        .beat_grid_info
+        .as_ref()
+        .is_some_and(|g| g.has_grid);
     let phase = PhaseWidget::new(theme)
         .phases(app.state.deck_a.beat_phase, app.state.deck_b.beat_phase)
         .has_grids(has_grid_a, has_grid_b);
@@ -725,24 +875,26 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
 
     // Build effect chain strings
     let effects_a = build_effect_string(
-        app.state.filter_a_enabled, app.state.filter_a_level,
-        app.state.delay_a_enabled, app.state.delay_a_level,
-        app.state.reverb_a_enabled, app.state.reverb_a_level,
+        app.state.filter_a_enabled,
+        app.state.filter_a_level,
+        app.state.delay_a_enabled,
+        app.state.delay_a_level,
+        app.state.reverb_a_enabled,
+        app.state.reverb_a_level,
     );
     let effects_b = build_effect_string(
-        app.state.filter_b_enabled, app.state.filter_b_level,
-        app.state.delay_b_enabled, app.state.delay_b_level,
-        app.state.reverb_b_enabled, app.state.reverb_b_level,
+        app.state.filter_b_enabled,
+        app.state.filter_b_level,
+        app.state.delay_b_enabled,
+        app.state.delay_b_level,
+        app.state.reverb_b_enabled,
+        app.state.reverb_b_level,
     );
 
     // Status bar
-    let status = StatusBarWidget::new(
-        app.state.mode,
-        &app.state.command_buffer,
-        theme,
-    )
-    .message(app.state.message.as_deref(), app.state.message_type)
-    .effects(effects_a, effects_b);
+    let status = StatusBarWidget::new(app.state.mode, &app.state.command_buffer, theme)
+        .message(app.state.message.as_deref(), app.state.message_type)
+        .effects(effects_a, effects_b);
     frame.render_widget(status, chunks[status_idx]);
 
     // Help overlay
@@ -764,6 +916,29 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
     if app.state.crt_effects.flicker_frames_remaining > 0 {
         apply_flicker(buf, area, app.state.crt_effects.flicker_intensity);
     }
+
+    // New CRT screen effects (only if master switch is on)
+    if app.state.crt_effects.crt_enabled {
+        // Phosphor glow - bloom around bright elements
+        if app.state.crt_effects.glow_enabled && app.state.crt_effects.glow_intensity > 0.0 {
+            apply_phosphor_glow(buf, area, app.state.crt_effects.glow_intensity, theme);
+        }
+
+        // Chromatic aberration - color fringing at edges
+        if app.state.crt_effects.chromatic_enabled && app.state.crt_effects.chromatic_offset > 0 {
+            apply_chromatic_aberration(buf, area, app.state.crt_effects.chromatic_offset);
+        }
+
+        // Static noise - random noise overlay (last, so it's on top)
+        if app.state.crt_effects.noise_enabled && app.state.crt_effects.noise_intensity > 0.0 {
+            apply_static_noise(
+                buf,
+                area,
+                app.state.crt_effects.noise_intensity,
+                app.state.frame_count,
+            );
+        }
+    }
 }
 
 fn render_title(frame: &mut ratatui::Frame, area: Rect, theme: &Theme) {
@@ -772,8 +947,11 @@ fn render_title(frame: &mut ratatui::Frame, area: Rect, theme: &Theme) {
 
     let title_text = " OLE - Open Live Engine ";
     let padding = (area.width as usize).saturating_sub(title_text.len()) / 2;
-    let padded = format!("{:═<pad$}{}{:═<rest$}",
-        "", title_text, "",
+    let padded = format!(
+        "{:═<pad$}{}{:═<rest$}",
+        "",
+        title_text,
+        "",
         pad = padding,
         rest = area.width as usize - padding - title_text.len()
     );
@@ -790,80 +968,112 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 /// Build effect chain string for display (e.g. "F5 D3 R2")
+///
+/// Optimized: uses a fixed-size buffer, no Vec allocation.
+#[inline]
 fn build_effect_string(
-    filter_enabled: bool, filter_level: u8,
-    delay_enabled: bool, delay_level: u8,
-    reverb_enabled: bool, reverb_level: u8,
+    filter_enabled: bool,
+    filter_level: u8,
+    delay_enabled: bool,
+    delay_level: u8,
+    reverb_enabled: bool,
+    reverb_level: u8,
 ) -> String {
-    let mut parts = Vec::new();
+    // Max output: "F10 D5 R5" = 10 chars, use small string optimization
+    let mut result = String::with_capacity(12);
+
     if filter_enabled && filter_level > 0 {
-        parts.push(format!("F{}", filter_level));
+        use std::fmt::Write;
+        let _ = write!(result, "F{}", filter_level);
     }
     if delay_enabled && delay_level > 0 {
-        parts.push(format!("D{}", delay_level));
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        use std::fmt::Write;
+        let _ = write!(result, "D{}", delay_level);
     }
     if reverb_enabled && reverb_level > 0 {
-        parts.push(format!("R{}", reverb_level));
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        use std::fmt::Write;
+        let _ = write!(result, "R{}", reverb_level);
     }
-    parts.join(" ")
+    result
 }
 
 /// Apply CRT scanlines effect - dims every Nth row for raster appearance
+///
+/// Optimized: uses integer math for dimming, pre-computes dim factor.
+#[inline]
 fn apply_scanlines(buf: &mut ratatui::buffer::Buffer, area: Rect, offset: u8, theme: &Theme) {
     use ratatui::style::Color;
 
-    // Use theme's scanline settings
     let scanline_spacing = theme.scanline_spacing;
     let intensity = theme.scanline_intensity;
 
-    // Skip if scanlines disabled
-    if scanline_spacing == 0 || intensity <= 0.0 {
+    // Early exit if scanlines disabled
+    if scanline_spacing == 0 || intensity <= 0.0 || area.width == 0 || area.height == 0 {
         return;
     }
 
-    let dim_factor = 1.0 - intensity.clamp(0.0, 0.8);  // Cap at 80% dimming
+    // Pre-compute dim factor as integer: (1.0 - intensity) * 256, capped at 80% dimming
+    // dim_factor ranges from 51 (0.2 * 256) to 256 (1.0 * 256)
+    let dim_factor = ((1.0 - intensity.clamp(0.0, 0.8)) * 256.0) as u16;
+
+    let offset_adjusted = offset / 4; // Slow roll effect
 
     for y in area.y..area.y + area.height {
-        let row_with_offset = (y as u8).wrapping_add(offset / 4);  // Slow roll
-        if row_with_offset.is_multiple_of(scanline_spacing) {
-            for x in area.x..area.x + area.width {
-                let cell = &mut buf[(x, y)];
-                // Dim the foreground color based on theme intensity
-                if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
-                    let new_r = (r as f32 * dim_factor) as u8;
-                    let new_g = (g as f32 * dim_factor) as u8;
-                    let new_b = (b as f32 * dim_factor) as u8;
-                    cell.set_style(cell.style().fg(Color::Rgb(new_r, new_g, new_b)));
-                } else {
-                    // Fallback: use theme dim
-                    cell.set_style(theme.dim());
-                }
+        let row_with_offset = (y as u8).wrapping_add(offset_adjusted);
+        if !row_with_offset.is_multiple_of(scanline_spacing) {
+            continue; // Skip non-scanline rows early
+        }
+
+        for x in area.x..area.x + area.width {
+            let cell = &mut buf[(x, y)];
+            if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
+                // Integer dim: (color * dim_factor) >> 8
+                let new_r = ((r as u16 * dim_factor) >> 8) as u8;
+                let new_g = ((g as u16 * dim_factor) >> 8) as u8;
+                let new_b = ((b as u16 * dim_factor) >> 8) as u8;
+                cell.set_style(cell.style().fg(Color::Rgb(new_r, new_g, new_b)));
+            } else {
+                cell.set_style(theme.dim());
             }
         }
     }
 }
 
 /// Apply screen flicker effect - random distortion on track load
+///
+/// Optimized: uses integer math for brightness boost, pre-computes factors.
+#[inline]
 fn apply_flicker(buf: &mut ratatui::buffer::Buffer, area: Rect, intensity: f32) {
     use ratatui::style::Color;
 
-    if intensity < 0.1 {
+    if intensity < 0.1 || area.width == 0 || area.height == 0 {
         return;
     }
 
-    // Simple flicker: brighten all cells briefly
-    let brightness_boost = intensity * 0.3;
+    // Pre-compute brightness boost as integer: (1.0 + intensity * 0.3) * 256
+    // This gives us a multiplier in the range 256-332 (for intensity 0.1-1.0)
+    let boost_factor = (256.0 + intensity * 76.8) as u16; // 76.8 = 0.3 * 256
+
+    // Pre-compute glitch threshold
+    let do_glitch = intensity > 0.5;
+    let glitch_offset = (intensity * 100.0) as u16;
 
     for y in area.y..area.y + area.height {
-        // Add some row-based variation using a simple pattern
-        let row_effect = (y * 7 + (intensity * 100.0) as u16).is_multiple_of(5) && intensity > 0.5;
+        // Check if this row should have glitch effect
+        let row_glitch = do_glitch && ((y.wrapping_mul(7).wrapping_add(glitch_offset)) % 5 == 0);
 
         for x in area.x..area.x + area.width {
             let cell = &mut buf[(x, y)];
 
-            if row_effect {
-                // Occasional row glitch - swap with neighbor character
-                let glitch_char = match (x + y) % 4 {
+            if row_glitch {
+                // Glitch character selection based on position
+                let glitch_char = match (x.wrapping_add(y)) & 3 {
                     0 => '░',
                     1 => '▒',
                     _ => cell.symbol().chars().next().unwrap_or(' '),
@@ -871,12 +1081,191 @@ fn apply_flicker(buf: &mut ratatui::buffer::Buffer, area: Rect, intensity: f32) 
                 cell.set_char(glitch_char);
             }
 
-            // Brighten colors
+            // Brighten colors using integer math
             if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
-                let new_r = ((r as f32 * (1.0 + brightness_boost)).min(255.0)) as u8;
-                let new_g = ((g as f32 * (1.0 + brightness_boost)).min(255.0)) as u8;
-                let new_b = ((b as f32 * (1.0 + brightness_boost)).min(255.0)) as u8;
+                // (color * boost_factor) >> 8, clamped to 255
+                let new_r = (((r as u16) * boost_factor) >> 8).min(255) as u8;
+                let new_g = (((g as u16) * boost_factor) >> 8).min(255) as u8;
+                let new_b = (((b as u16) * boost_factor) >> 8).min(255) as u8;
                 cell.set_style(cell.style().fg(Color::Rgb(new_r, new_g, new_b)));
+            }
+        }
+    }
+}
+
+/// Apply phosphor glow effect - bright elements bleed light to neighbors
+///
+/// Optimized single-pass algorithm: processes bottom-to-top, right-to-left
+/// to avoid cascading glow. Uses integer math for blend calculations.
+/// Zero heap allocations.
+#[inline]
+fn apply_phosphor_glow(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    intensity: f32,
+    theme: &Theme,
+) {
+    use ratatui::style::Color;
+
+    if intensity <= 0.0 || area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let threshold = theme.glow_threshold;
+    // Pre-compute blend factor as fixed-point (0-256 scale) for integer math
+    // glow_factor = intensity * 0.25, scaled to 0-64 range for bit shifting
+    let blend = ((intensity * 64.0) as u16).min(64);
+
+    let x_end = area.x + area.width;
+    let y_end = area.y + area.height;
+
+    // Process in reverse order (bottom-right to top-left) to prevent glow cascading
+    for y in (area.y..y_end).rev() {
+        for x in (area.x..x_end).rev() {
+            let cell = &buf[(x, y)];
+            if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
+                // Check if this is a bright cell (any channel exceeds threshold)
+                if r > threshold || g > threshold || b > threshold {
+                    // Apply glow to neighbors using integer blend
+                    // blend_color = neighbor + ((bright - neighbor) * blend) >> 6
+                    apply_glow_to_neighbor(buf, x.wrapping_sub(1), y, r, g, b, blend, area);
+                    apply_glow_to_neighbor(buf, x + 1, y, r, g, b, blend, area);
+                    apply_glow_to_neighbor(buf, x, y.wrapping_sub(1), r, g, b, blend, area);
+                    apply_glow_to_neighbor(buf, x, y + 1, r, g, b, blend, area);
+                }
+            }
+        }
+    }
+}
+
+/// Apply glow blend to a single neighbor cell (inlined for performance)
+#[inline(always)]
+#[allow(clippy::too_many_arguments)] // Intentional: inline helper avoids struct overhead
+fn apply_glow_to_neighbor(
+    buf: &mut ratatui::buffer::Buffer,
+    nx: u16,
+    ny: u16,
+    bright_r: u8,
+    bright_g: u8,
+    bright_b: u8,
+    blend: u16,
+    area: Rect,
+) {
+    use ratatui::style::Color;
+
+    // Bounds check
+    if nx < area.x || nx >= area.x + area.width || ny < area.y || ny >= area.y + area.height {
+        return;
+    }
+
+    let cell = &mut buf[(nx, ny)];
+    if let Some(Color::Rgb(nr, ng, nb)) = cell.style().fg {
+        // Integer blend: new = old + ((bright - old) * blend) >> 6
+        let new_r =
+            (nr as u16 + (((bright_r as i16 - nr as i16) as u16 * blend) >> 6)).min(255) as u8;
+        let new_g =
+            (ng as u16 + (((bright_g as i16 - ng as i16) as u16 * blend) >> 6)).min(255) as u8;
+        let new_b =
+            (nb as u16 + (((bright_b as i16 - nb as i16) as u16 * blend) >> 6)).min(255) as u8;
+        cell.set_style(cell.style().fg(Color::Rgb(new_r, new_g, new_b)));
+    }
+}
+
+/// Apply chromatic aberration effect - color channel offset based on position
+///
+/// Optimized: uses pure integer math, no floating point operations.
+/// Pre-computes shift values per column for cache efficiency.
+#[inline]
+fn apply_chromatic_aberration(buf: &mut ratatui::buffer::Buffer, area: Rect, offset: u8) {
+    use ratatui::style::Color;
+
+    if offset == 0 || area.width == 0 {
+        return;
+    }
+
+    let center_x = area.x + area.width / 2;
+    let half_width = (area.width / 2).max(1) as i32;
+    // Pre-multiply offset for integer math: offset * 8, then we'll divide by half_width
+    let offset_scaled = (offset as i32) << 3;
+
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            let cell = &mut buf[(x, y)];
+
+            if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
+                // Integer distance: (x - center) ranges from -half_width to +half_width
+                // shift = (x - center) * offset * 8 / half_width
+                let dx = x as i32 - center_x as i32;
+                let shift = (dx * offset_scaled) / half_width;
+
+                // Clamp using saturating arithmetic
+                let new_r = (r as i32 + shift).clamp(0, 255) as u8;
+                let new_b = (b as i32 - shift).clamp(0, 255) as u8;
+
+                cell.set_style(cell.style().fg(Color::Rgb(new_r, g, new_b)));
+            }
+        }
+    }
+}
+
+/// Apply static noise effect - random character noise overlay
+///
+/// Optimized: uses fast xorshift hash, integer math for color dimming,
+/// and early-exit checks to minimize work.
+#[inline]
+fn apply_static_noise(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    intensity: f32,
+    frame_count: u64,
+) {
+    use ratatui::style::Color;
+
+    if intensity <= 0.0 || area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    // Noise glyphs (various densities) - static array
+    const NOISE_GLYPHS: [char; 5] = ['░', '▒', '▓', '·', '∙'];
+
+    // Pre-compute threshold as u32 for faster comparison (0-65535 range)
+    let threshold = ((intensity * 65535.0) as u32).min(65535);
+
+    // Dim factor as integer: 70% = multiply by 179 then >> 8
+    const DIM_FACTOR: u16 = 179; // 0.7 * 256
+
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            // Fast xorshift-based hash for pseudo-random
+            let mut hash = (x as u32)
+                .wrapping_mul(0x9E3779B9)
+                .wrapping_add((y as u32).wrapping_mul(0x85EBCA6B))
+                .wrapping_add((frame_count as u32).wrapping_mul(0xC2B2AE35));
+            hash ^= hash >> 16;
+            hash = hash.wrapping_mul(0x85EBCA6B);
+            hash ^= hash >> 13;
+
+            // Use lower 16 bits for threshold comparison
+            if (hash & 0xFFFF) < threshold {
+                let cell = &mut buf[(x, y)];
+
+                // Check for space early to avoid work
+                let current_char = cell.symbol().chars().next().unwrap_or(' ');
+                if current_char == ' ' {
+                    continue;
+                }
+
+                // Pick noise glyph using upper bits of hash
+                let glyph_idx = ((hash >> 16) % NOISE_GLYPHS.len() as u32) as usize;
+                cell.set_char(NOISE_GLYPHS[glyph_idx]);
+
+                // Integer dim: (color * 179) >> 8 ≈ color * 0.7
+                if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
+                    let new_r = ((r as u16 * DIM_FACTOR) >> 8) as u8;
+                    let new_g = ((g as u16 * DIM_FACTOR) >> 8) as u8;
+                    let new_b = ((b as u16 * DIM_FACTOR) >> 8) as u8;
+                    cell.set_style(cell.style().fg(Color::Rgb(new_r, new_g, new_b)));
+                }
             }
         }
     }

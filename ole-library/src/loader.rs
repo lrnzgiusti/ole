@@ -108,10 +108,7 @@ impl TrackLoader {
 
         // Get track info
         let source_sample_rate = codec_params.sample_rate.unwrap_or(44100);
-        let channels = codec_params
-            .channels
-            .map(|c| c.count() as u16)
-            .unwrap_or(2);
+        let channels = codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
 
         // Create decoder
         let mut decoder = symphonia::default::get_codecs()
@@ -255,8 +252,8 @@ impl TrackLoader {
             if let Ok(resampled) = resampler.process(&input_refs, None) {
                 for (ch, data) in resampled.into_iter().enumerate() {
                     // Only take the proportional amount of output
-                    let output_frames = (remaining * self.target_sample_rate as usize)
-                        / source_rate as usize;
+                    let output_frames =
+                        (remaining * self.target_sample_rate as usize) / source_rate as usize;
                     output[ch].extend(&data[..output_frames.min(data.len())]);
                 }
             }

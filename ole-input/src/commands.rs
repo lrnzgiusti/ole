@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 // Re-export types for use in commands
-pub use ole_audio::{FilterType, FilterMode, DelayModulation};
+pub use ole_audio::{DelayModulation, FilterMode, FilterType};
 
 /// Deck identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,11 +56,11 @@ pub enum Command {
     // Seeking
     Seek(DeckId, f64),
     Nudge(DeckId, f64),
-    Beatjump(DeckId, i32),  // Jump by N beats (negative = backward)
+    Beatjump(DeckId, i32), // Jump by N beats (negative = backward)
 
     // Cue points
-    SetCue(DeckId, u8),     // Set cue point 1-4
-    JumpCue(DeckId, u8),    // Jump to cue point 1-4
+    SetCue(DeckId, u8),  // Set cue point 1-4
+    JumpCue(DeckId, u8), // Jump to cue point 1-4
 
     // Tempo
     SetTempo(DeckId, f32),
@@ -95,9 +95,9 @@ pub enum Command {
     ToggleVinyl(DeckId),
     SetVinylPreset(DeckId, VinylPresetId),
     CycleVinylPreset(DeckId),
-    SetVinylWow(DeckId, f32),        // 0.0-1.0
-    SetVinylNoise(DeckId, f32),      // 0.0-1.0
-    SetVinylWarmth(DeckId, f32),     // 0.0-1.0
+    SetVinylWow(DeckId, f32),    // 0.0-1.0
+    SetVinylNoise(DeckId, f32),  // 0.0-1.0
+    SetVinylWarmth(DeckId, f32), // 0.0-1.0
 
     // Time stretching (pitch-independent tempo)
     ToggleTimeStretch(DeckId),
@@ -112,10 +112,10 @@ pub enum Command {
 
     // UI
     ToggleHelp,
-    ToggleScope,      // Toggle between spectrum and oscilloscope view
-    CycleScopeMode,   // Cycle oscilloscope mode (time domain, lissajous)
-    ZoomIn(DeckId),   // Zoom in on waveform
-    ZoomOut(DeckId),  // Zoom out on waveform
+    ToggleScope,     // Toggle between spectrum and oscilloscope view
+    CycleScopeMode,  // Cycle oscilloscope mode (time domain, lissajous)
+    ZoomIn(DeckId),  // Zoom in on waveform
+    ZoomOut(DeckId), // Zoom out on waveform
     SetTheme(String),
     CycleFocus,
     Focus(DeckId),
@@ -143,4 +143,11 @@ pub enum Command {
 
     // Command mode
     ExecuteCommand(String),
+
+    // CRT screen effects
+    ToggleCrt,         // Master CRT effects toggle
+    ToggleGlow,        // Phosphor glow effect
+    ToggleNoise,       // Static noise effect
+    ToggleChromatic,   // RGB chromatic aberration
+    CycleCrtIntensity, // Cycle through Off/Subtle/Medium/Heavy
 }

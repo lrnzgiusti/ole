@@ -306,12 +306,13 @@ impl Effect for Delay {
             }
 
             // Smooth delay time changes
-            self.delay_samples =
-                self.delay_samples * self.delay_smooth + self.target_delay * (1.0 - self.delay_smooth);
+            self.delay_samples = self.delay_samples * self.delay_smooth
+                + self.target_delay * (1.0 - self.delay_smooth);
 
             // Apply modulation
             let mod_offset = self.get_modulation();
-            let effective_delay = (self.delay_samples + mod_offset).clamp(4.0, self.buffer_frames as f32 - 4.0);
+            let effective_delay =
+                (self.delay_samples + mod_offset).clamp(4.0, self.buffer_frames as f32 - 4.0);
 
             // Read delayed signal with interpolation
             let (delayed_l, delayed_r) = self.read_interpolated(effective_delay);

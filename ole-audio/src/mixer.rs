@@ -99,9 +99,7 @@ impl Mixer {
     /// Calculate gain for deck B based on crossfader
     fn gain_b(&self) -> f32 {
         match self.curve {
-            CrossfaderCurve::Linear => {
-                (1.0 + self.crossfader) * 0.5
-            }
+            CrossfaderCurve::Linear => (1.0 + self.crossfader) * 0.5,
             CrossfaderCurve::ConstantPower => {
                 let angle = (self.crossfader + 1.0) * std::f32::consts::FRAC_PI_4;
                 angle.sin()

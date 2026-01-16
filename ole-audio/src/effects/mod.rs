@@ -1,16 +1,16 @@
 //! Audio effects for OLE
 
+mod delay;
 mod filter;
 mod ladder_filter;
-mod svf;
-mod delay;
 mod reverb;
+mod svf;
 
+pub use delay::{Delay, DelayInterpolation, DelayModulation};
 pub use filter::{Filter, FilterType};
 pub use ladder_filter::LadderFilter;
-pub use svf::{StateVariableFilter, SvfOutputType};
-pub use delay::{Delay, DelayInterpolation, DelayModulation};
 pub use reverb::Reverb;
+pub use svf::{StateVariableFilter, SvfOutputType};
 
 /// Filter mode - selects which filter implementation to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

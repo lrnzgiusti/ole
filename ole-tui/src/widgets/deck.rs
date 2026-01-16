@@ -1,9 +1,11 @@
 //! Deck widget - displays track info, waveform, and controls
 
+use crate::app::WaveformZoom;
+use crate::theme::Theme;
 use ole_analysis::FrequencyBand;
 use ole_audio::DeckState;
-use ole_audio::PlaybackState;
 use ole_audio::FilterType;
+use ole_audio::PlaybackState;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -11,8 +13,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget},
 };
-use crate::app::WaveformZoom;
-use crate::theme::Theme;
 
 /// Characters for vertical bar rendering (8 levels + empty)
 const BAR_CHARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -131,8 +131,8 @@ impl<'a> DeckWidget<'a> {
         if is_played {
             match band {
                 FrequencyBand::Bass => Style::default().fg(self.theme.deck_a), // Warm color for bass
-                FrequencyBand::Mid => Style::default().fg(self.theme.accent),   // Accent for mids
-                FrequencyBand::High => Style::default().fg(self.theme.deck_b),  // Cool color for highs
+                FrequencyBand::Mid => Style::default().fg(self.theme.accent),  // Accent for mids
+                FrequencyBand::High => Style::default().fg(self.theme.deck_b), // Cool color for highs
             }
         } else {
             self.theme.dim()
@@ -176,7 +176,9 @@ impl<'a> DeckWidget<'a> {
         let use_enhanced = !enhanced.is_empty();
 
         // Calculate cue marker positions (index in waveform display)
-        let cue_markers: Vec<(usize, usize)> = self.state.cue_points
+        let cue_markers: Vec<(usize, usize)> = self
+            .state
+            .cue_points
             .iter()
             .enumerate()
             .filter_map(|(idx, opt)| {
@@ -197,7 +199,9 @@ impl<'a> DeckWidget<'a> {
 
         // Calculate beat marker positions from beat grid (within viewport)
         // Returns (position, is_downbeat) where downbeat = beat 1 of a 4-beat bar
-        let beat_markers: Vec<(usize, bool)> = self.state.beat_grid_info
+        let beat_markers: Vec<(usize, bool)> = self
+            .state
+            .beat_grid_info
             .as_ref()
             .filter(|g| g.has_grid && g.bpm > 0.0)
             .map(|grid| {
@@ -213,7 +217,8 @@ impl<'a> DeckWidget<'a> {
                     while pre_beat >= 0.0 {
                         let beat_progress = (pre_beat / duration).clamp(0.0, 1.0);
                         if beat_progress >= viewport_start && beat_progress <= viewport_end {
-                            let beat_in_viewport = (beat_progress - viewport_start) / viewport_range;
+                            let beat_in_viewport =
+                                (beat_progress - viewport_start) / viewport_range;
                             let beat_pos = (beat_in_viewport * width as f64) as usize;
                             if beat_pos < width {
                                 // Downbeat every 4 beats (0, 4, 8, ...)
@@ -271,11 +276,14 @@ impl<'a> DeckWidget<'a> {
                     let point = enhanced.points.get(idx);
                     (
                         point.map(|p| p.amplitude).unwrap_or(0.0),
-                        point.map(|p| p.band).unwrap_or(FrequencyBand::Mid)
+                        point.map(|p| p.band).unwrap_or(FrequencyBand::Mid),
                     )
                 } else {
                     let idx = (track_progress * waveform.len() as f64) as usize;
-                    (waveform.get(idx).copied().unwrap_or(0.0), FrequencyBand::Mid)
+                    (
+                        waveform.get(idx).copied().unwrap_or(0.0),
+                        FrequencyBand::Mid,
+                    )
                 };
 
                 let char_idx = (peak.clamp(0.0, 1.0) * 8.0) as usize;
@@ -295,11 +303,14 @@ impl<'a> DeckWidget<'a> {
                     let point = enhanced.points.get(idx);
                     (
                         point.map(|p| p.amplitude).unwrap_or(0.0),
-                        point.map(|p| p.band).unwrap_or(FrequencyBand::Mid)
+                        point.map(|p| p.band).unwrap_or(FrequencyBand::Mid),
                     )
                 } else {
                     let idx = (track_progress * waveform.len() as f64) as usize;
-                    (waveform.get(idx).copied().unwrap_or(0.0), FrequencyBand::Mid)
+                    (
+                        waveform.get(idx).copied().unwrap_or(0.0),
+                        FrequencyBand::Mid,
+                    )
                 };
 
                 let char_idx = (peak.clamp(0.0, 1.0) * 8.0) as usize;
@@ -420,7 +431,9 @@ impl Widget for DeckWidget<'_> {
         };
 
         let title_style = if self.sync_quality > 0.95 {
-            Style::default().fg(self.theme.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(self.theme.accent)
+                .add_modifier(Modifier::BOLD)
         } else if self.sync_quality > 0.80 {
             Style::default().fg(self.theme.warning)
         } else if self.is_focused {
@@ -452,7 +465,11 @@ impl Widget for DeckWidget<'_> {
         .split(inner);
 
         // Row 1: Track name and transport
-        let track_name = self.state.track_name.as_deref().unwrap_or("No track loaded");
+        let track_name = self
+            .state
+            .track_name
+            .as_deref()
+            .unwrap_or("No track loaded");
         let transport = self.render_transport();
         let name_width = (inner.width as usize).saturating_sub(4);
         let truncated_name: String = track_name.chars().take(name_width).collect();
@@ -474,11 +491,15 @@ impl Widget for DeckWidget<'_> {
             Self::format_time(self.state.position),
             Self::format_time(remaining)
         );
-        let key_str = self.state.key
+        let key_str = self
+            .state
+            .key
             .as_ref()
             .map(|k| format!("KEY:{}", k))
             .unwrap_or_else(|| "KEY:---".to_string());
-        let bpm_str = self.state.bpm
+        let bpm_str = self
+            .state
+            .bpm
             .map(|b| format!("BPM:{:.1}", b))
             .unwrap_or_else(|| "BPM:---".to_string());
         let tempo_str = format!("×{:.2}", self.state.tempo);
@@ -523,7 +544,10 @@ impl Widget for DeckWidget<'_> {
         };
         let mut line_spans = vec![Span::styled("GAIN:", self.theme.dim())];
         line_spans.extend(gain_spans);
-        line_spans.push(Span::styled(format!("{:3}%", gain_pct), self.theme.normal()));
+        line_spans.push(Span::styled(
+            format!("{:3}%", gain_pct),
+            self.theme.normal(),
+        ));
         line_spans.push(clip_indicator);
         let line = Line::from(line_spans);
         Paragraph::new(line).render(chunks[3], buf);

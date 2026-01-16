@@ -46,7 +46,10 @@ impl Default for EnhancedWaveform {
 impl EnhancedWaveform {
     /// Create a new enhanced waveform
     pub fn new(points: Vec<WaveformPoint>, duration_secs: f64) -> Self {
-        Self { points, duration_secs }
+        Self {
+            points,
+            duration_secs,
+        }
     }
 
     /// Create an empty waveform with given number of points
@@ -162,9 +165,21 @@ impl WaveformAnalyzer {
             .sum();
 
         // Normalize by band width
-        let bass_avg = if bass_end_bin > 1 { bass_energy / (bass_end_bin - 1) as f32 } else { 0.0 };
-        let mid_avg = if mid_end_bin > bass_end_bin { mid_energy / (mid_end_bin - bass_end_bin) as f32 } else { 0.0 };
-        let high_avg = if nyquist_bin > mid_end_bin { high_energy / (nyquist_bin - mid_end_bin) as f32 } else { 0.0 };
+        let bass_avg = if bass_end_bin > 1 {
+            bass_energy / (bass_end_bin - 1) as f32
+        } else {
+            0.0
+        };
+        let mid_avg = if mid_end_bin > bass_end_bin {
+            mid_energy / (mid_end_bin - bass_end_bin) as f32
+        } else {
+            0.0
+        };
+        let high_avg = if nyquist_bin > mid_end_bin {
+            high_energy / (nyquist_bin - mid_end_bin) as f32
+        } else {
+            0.0
+        };
 
         // Determine dominant band
         if bass_avg >= mid_avg && bass_avg >= high_avg {
@@ -177,7 +192,12 @@ impl WaveformAnalyzer {
     }
 
     /// Generate enhanced waveform from interleaved stereo samples
-    pub fn analyze(&mut self, samples: &[f32], target_points: usize, duration_secs: f64) -> EnhancedWaveform {
+    pub fn analyze(
+        &mut self,
+        samples: &[f32],
+        target_points: usize,
+        duration_secs: f64,
+    ) -> EnhancedWaveform {
         if samples.is_empty() {
             return EnhancedWaveform::empty(target_points);
         }
@@ -242,9 +262,18 @@ mod tests {
     #[test]
     fn test_waveform_access() {
         let points = vec![
-            WaveformPoint { amplitude: 0.5, band: FrequencyBand::Bass },
-            WaveformPoint { amplitude: 0.8, band: FrequencyBand::Mid },
-            WaveformPoint { amplitude: 0.3, band: FrequencyBand::High },
+            WaveformPoint {
+                amplitude: 0.5,
+                band: FrequencyBand::Bass,
+            },
+            WaveformPoint {
+                amplitude: 0.8,
+                band: FrequencyBand::Mid,
+            },
+            WaveformPoint {
+                amplitude: 0.3,
+                band: FrequencyBand::High,
+            },
         ];
         let wf = EnhancedWaveform::new(points, 3.0);
 

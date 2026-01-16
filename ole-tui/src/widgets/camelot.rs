@@ -37,7 +37,8 @@ impl HarmonicCompatibility {
             return Self::Unknown;
         };
 
-        let (Some(camelot_a), Some(camelot_b)) = (CamelotKey::parse(a), CamelotKey::parse(b)) else {
+        let (Some(camelot_a), Some(camelot_b)) = (CamelotKey::parse(a), CamelotKey::parse(b))
+        else {
             return Self::Unknown;
         };
 
@@ -130,11 +131,13 @@ impl<'a> CamelotWheelWidget<'a> {
                 .add_modifier(Modifier::BOLD)
         } else {
             // Check if compatible with either deck
-            let compatible_a = self.key_a
+            let compatible_a = self
+                .key_a
                 .and_then(CamelotKey::parse)
                 .map(|k| k.is_compatible(&key))
                 .unwrap_or(false);
-            let compatible_b = self.key_b
+            let compatible_b = self
+                .key_b
                 .and_then(CamelotKey::parse)
                 .map(|k| k.is_compatible(&key))
                 .unwrap_or(false);
@@ -171,12 +174,9 @@ impl<'a> CamelotWheelWidget<'a> {
             HarmonicCompatibility::Perfect => Style::default()
                 .fg(self.theme.accent)
                 .add_modifier(Modifier::BOLD),
-            HarmonicCompatibility::Harmonic => Style::default()
-                .fg(self.theme.accent),
-            HarmonicCompatibility::Close => Style::default()
-                .fg(self.theme.warning),
-            HarmonicCompatibility::Clash => Style::default()
-                .fg(self.theme.danger),
+            HarmonicCompatibility::Harmonic => Style::default().fg(self.theme.accent),
+            HarmonicCompatibility::Close => Style::default().fg(self.theme.warning),
+            HarmonicCompatibility::Clash => Style::default().fg(self.theme.danger),
             HarmonicCompatibility::Unknown => self.theme.dim(),
         }
     }

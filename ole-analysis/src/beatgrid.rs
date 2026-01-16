@@ -186,7 +186,8 @@ impl BeatGridAnalyzer {
     fn find_onset_peaks(&self, onset_fn: &[f32]) -> Vec<usize> {
         // Adaptive threshold: mean + 0.5 * std_dev
         let mean: f32 = onset_fn.iter().sum::<f32>() / onset_fn.len() as f32;
-        let variance: f32 = onset_fn.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / onset_fn.len() as f32;
+        let variance: f32 =
+            onset_fn.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / onset_fn.len() as f32;
         let std_dev = variance.sqrt();
         let threshold = (mean + 0.5 * std_dev).max(0.1);
 
@@ -248,7 +249,7 @@ impl BeatGridAnalyzer {
         // Convert to lag range in onset function frames
         let frames_per_second = self.sample_rate as f32 / self.hop_size as f32;
         let min_lag = (frames_per_second * 60.0 / 200.0) as usize; // 200 BPM
-        let max_lag = (frames_per_second * 60.0 / 60.0) as usize;  // 60 BPM
+        let max_lag = (frames_per_second * 60.0 / 60.0) as usize; // 60 BPM
 
         // Use first ~10 seconds for analysis
         let analysis_len = onset_fn.len().min(max_lag * 8);

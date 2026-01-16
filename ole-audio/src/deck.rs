@@ -1,7 +1,9 @@
 //! Deck implementation - track playback with pitch/tempo control
 
+use ole_analysis::{
+    BeatGrid, BeatGridAnalyzer, BpmDetector, EnhancedWaveform, SpectrumAnalyzer, SpectrumData,
+};
 use std::sync::Arc;
-use ole_analysis::{EnhancedWaveform, SpectrumAnalyzer, SpectrumData, BpmDetector, BeatGrid, BeatGridAnalyzer};
 
 /// Playback state for a deck
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -50,23 +52,23 @@ pub const SCOPE_SAMPLES_SIZE: usize = 512;
 #[derive(Debug, Clone)]
 pub struct DeckState {
     pub playback: PlaybackState,
-    pub position: f64,      // seconds
-    pub duration: f64,      // seconds
-    pub tempo: f32,         // 1.0 = original speed
-    pub pitch: f32,         // semitones shift
-    pub gain: f32,          // 0.0 - 2.0
-    pub bpm: Option<f32>,   // detected BPM (adjusted for tempo)
+    pub position: f64,       // seconds
+    pub duration: f64,       // seconds
+    pub tempo: f32,          // 1.0 = original speed
+    pub pitch: f32,          // semitones shift
+    pub gain: f32,           // 0.0 - 2.0
+    pub bpm: Option<f32>,    // detected BPM (adjusted for tempo)
     pub key: Option<String>, // Camelot notation: "8A", "12B"
     pub track_name: Option<String>,
     pub spectrum: SpectrumData,
-    pub beat_phase: f32,    // current phase within beat (0.0 - 1.0)
+    pub beat_phase: f32, // current phase within beat (0.0 - 1.0)
     pub beat_grid_info: Option<BeatGridInfo>,
-    pub waveform_overview: Arc<Vec<f32>>,  // pre-computed peaks for waveform display
-    pub enhanced_waveform: Arc<EnhancedWaveform>,  // enhanced waveform with frequency bands
-    pub peak_level: f32,    // current peak level (0.0-1.0+, >1.0 = clipping)
-    pub peak_hold: f32,     // peak hold level (decays slowly after hold time)
-    pub is_clipping: bool,  // true if clipping detected
-    pub cue_points: [Option<f64>; 8],  // cue point positions in seconds (1-8)
+    pub waveform_overview: Arc<Vec<f32>>, // pre-computed peaks for waveform display
+    pub enhanced_waveform: Arc<EnhancedWaveform>, // enhanced waveform with frequency bands
+    pub peak_level: f32,                  // current peak level (0.0-1.0+, >1.0 = clipping)
+    pub peak_hold: f32,                   // peak hold level (decays slowly after hold time)
+    pub is_clipping: bool,                // true if clipping detected
+    pub cue_points: [Option<f64>; 8],     // cue point positions in seconds (1-8)
     /// Recent audio samples for oscilloscope display (stereo interleaved: [L, R, L, R, ...])
     pub scope_samples: Box<[f32; SCOPE_SAMPLES_SIZE * 2]>,
 }
@@ -226,8 +228,15 @@ impl Deck {
                 // Fallback to legacy BPM detector
                 let analysis_samples = self.samples.len().min(sample_rate as usize * 10);
                 for chunk in self.samples[..analysis_samples].chunks(1024) {
-                    let mono: Vec<f32> = chunk.chunks(2)
-                        .map(|s| if s.len() == 2 { (s[0] + s[1]) * 0.5 } else { s[0] })
+                    let mono: Vec<f32> = chunk
+                        .chunks(2)
+                        .map(|s| {
+                            if s.len() == 2 {
+                                (s[0] + s[1]) * 0.5
+                            } else {
+                                s[0]
+                            }
+                        })
                         .collect();
                     self.bpm_detector.process(&mono);
                 }
@@ -421,7 +430,12 @@ impl Deck {
     }
 
     /// Start a smooth sync transition
-    pub fn start_sync_transition(&mut self, target_tempo: f32, phase_offset: f64, duration_samples: u64) {
+    pub fn start_sync_transition(
+        &mut self,
+        target_tempo: f32,
+        phase_offset: f64,
+        duration_samples: u64,
+    ) {
         self.sync_transition = SyncTransition {
             target_tempo,
             start_tempo: self.tempo,
@@ -455,9 +469,9 @@ impl Deck {
 
         // Convert cue points from sample positions to seconds
         let sample_rate_stereo = self.sample_rate as f64 * 2.0;
-        let cue_points = self.cue_points.map(|opt| {
-            opt.map(|pos| pos / sample_rate_stereo)
-        });
+        let cue_points = self
+            .cue_points
+            .map(|opt| opt.map(|pos| pos / sample_rate_stereo));
 
         // Copy scope buffer for oscilloscope display
         // We read from the ring buffer in order, starting from write position
@@ -575,7 +589,9 @@ impl Deck {
             self.peak_hold = current_peak;
             self.peak_hold_samples = HOLD_SAMPLES;
         } else if self.peak_hold_samples > 0 {
-            self.peak_hold_samples = self.peak_hold_samples.saturating_sub(output.len() as u32 / 2);
+            self.peak_hold_samples = self
+                .peak_hold_samples
+                .saturating_sub(output.len() as u32 / 2);
         } else {
             self.peak_hold *= DECAY_RATE;
         }
@@ -606,7 +622,8 @@ impl Deck {
 
         // Apply phase offset gradually
         let target_offset = self.sync_transition.target_phase_offset;
-        let offset_to_apply = target_offset * eased as f64 - self.sync_transition.applied_phase_offset;
+        let offset_to_apply =
+            target_offset * eased as f64 - self.sync_transition.applied_phase_offset;
         self.position += offset_to_apply;
         self.sync_transition.applied_phase_offset += offset_to_apply;
 

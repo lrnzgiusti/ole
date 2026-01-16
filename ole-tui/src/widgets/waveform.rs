@@ -1,5 +1,7 @@
 //! Enhanced waveform widget with zoom, frequency coloring, and overview+detail views
 
+use crate::app::WaveformZoom;
+use crate::theme::Theme;
 use ole_analysis::{EnhancedWaveform, FrequencyBand};
 use ratatui::{
     buffer::Buffer,
@@ -9,8 +11,6 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 use std::sync::Arc;
-use crate::app::WaveformZoom;
-use crate::theme::Theme;
 
 /// Characters for vertical bar rendering (8 levels + empty)
 const BAR_CHARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -19,11 +19,11 @@ const BAR_CHARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '�
 pub struct EnhancedWaveformWidget<'a> {
     theme: &'a Theme,
     waveform: &'a Arc<EnhancedWaveform>,
-    position: f64,       // Current position (0.0 - 1.0)
-    duration: f64,       // Track duration in seconds
+    position: f64, // Current position (0.0 - 1.0)
+    duration: f64, // Track duration in seconds
     zoom: WaveformZoom,
-    beat_markers: Vec<usize>,  // Positions of beat markers (in display width units)
-    cue_markers: Vec<(usize, usize)>,  // (cue_number, position)
+    beat_markers: Vec<usize>, // Positions of beat markers (in display width units)
+    cue_markers: Vec<(usize, usize)>, // (cue_number, position)
 }
 
 impl<'a> EnhancedWaveformWidget<'a> {
@@ -64,8 +64,8 @@ impl<'a> EnhancedWaveformWidget<'a> {
     fn band_color(&self, band: FrequencyBand, is_played: bool) -> Style {
         let base_style = match band {
             FrequencyBand::Bass => Style::default().fg(self.theme.deck_a), // Warm color for bass
-            FrequencyBand::Mid => Style::default().fg(self.theme.accent),   // Accent for mids
-            FrequencyBand::High => Style::default().fg(self.theme.deck_b),  // Cool color for highs
+            FrequencyBand::Mid => Style::default().fg(self.theme.accent),  // Accent for mids
+            FrequencyBand::High => Style::default().fg(self.theme.deck_b), // Cool color for highs
         };
 
         if is_played {
@@ -79,7 +79,11 @@ impl<'a> EnhancedWaveformWidget<'a> {
     /// Calculate viewport start/end based on zoom level and position
     fn viewport(&self, _width: usize) -> (f64, f64) {
         let viewport_size = self.zoom.viewport_fraction();
-        let progress = if self.duration > 0.0 { self.position / self.duration } else { 0.0 };
+        let progress = if self.duration > 0.0 {
+            self.position / self.duration
+        } else {
+            0.0
+        };
 
         // Center viewport on playhead
         let half = viewport_size / 2.0;
@@ -97,7 +101,11 @@ impl<'a> EnhancedWaveformWidget<'a> {
             return Line::from(Span::styled("─".repeat(width), self.theme.dim()));
         }
 
-        let progress = if self.duration > 0.0 { self.position / self.duration } else { 0.0 };
+        let progress = if self.duration > 0.0 {
+            self.position / self.duration
+        } else {
+            0.0
+        };
         let viewport_range = end - start;
 
         // Convert playhead to position within viewport
@@ -135,9 +143,10 @@ impl<'a> EnhancedWaveformWidget<'a> {
                 spans.push(Span::styled("│", self.theme.highlight()));
             } else {
                 // Get waveform point at this position
-                let point = self.waveform.points.get(
-                    (track_pos * self.waveform.points.len() as f64) as usize
-                );
+                let point = self
+                    .waveform
+                    .points
+                    .get((track_pos * self.waveform.points.len() as f64) as usize);
 
                 if let Some(point) = point {
                     let char_idx = (point.amplitude.clamp(0.0, 1.0) * 8.0) as usize;
@@ -162,7 +171,11 @@ impl<'a> EnhancedWaveformWidget<'a> {
             return Line::from(Span::styled("─".repeat(width), self.theme.dim()));
         }
 
-        let progress = if self.duration > 0.0 { self.position / self.duration } else { 0.0 };
+        let progress = if self.duration > 0.0 {
+            self.position / self.duration
+        } else {
+            0.0
+        };
         let playhead_pos = (progress * width as f64) as usize;
 
         let (viewport_start, viewport_end) = self.viewport(width);
@@ -173,7 +186,8 @@ impl<'a> EnhancedWaveformWidget<'a> {
 
         for i in 0..width {
             let track_pos = i as f64 / width as f64;
-            let is_viewport_edge = i == viewport_start_pos || (i > 0 && i == viewport_end_pos.saturating_sub(1));
+            let is_viewport_edge =
+                i == viewport_start_pos || (i > 0 && i == viewport_end_pos.saturating_sub(1));
             let is_in_viewport = i >= viewport_start_pos && i < viewport_end_pos;
 
             if i == playhead_pos {
@@ -185,9 +199,10 @@ impl<'a> EnhancedWaveformWidget<'a> {
                 spans.push(Span::styled(bracket, self.theme.highlight()));
             } else {
                 // Waveform bar (simplified - just amplitude, no frequency coloring in overview)
-                let point = self.waveform.points.get(
-                    (track_pos * self.waveform.points.len() as f64) as usize
-                );
+                let point = self
+                    .waveform
+                    .points
+                    .get((track_pos * self.waveform.points.len() as f64) as usize);
 
                 if let Some(point) = point {
                     // Use half-height characters for compact overview
@@ -233,7 +248,11 @@ impl Widget for EnhancedWaveformWidget<'_> {
             let detail = self.render_detail_row(width, viewport_start, viewport_end);
 
             let overview_area = Rect { height: 1, ..area };
-            let detail_area = Rect { y: area.y + 1, height: 1, ..area };
+            let detail_area = Rect {
+                y: area.y + 1,
+                height: 1,
+                ..area
+            };
 
             Paragraph::new(overview).render(overview_area, buf);
             Paragraph::new(detail).render(detail_area, buf);
@@ -244,8 +263,16 @@ impl Widget for EnhancedWaveformWidget<'_> {
             let detail2 = self.render_detail_row(width, viewport_start, viewport_end);
 
             let overview_area = Rect { height: 1, ..area };
-            let detail1_area = Rect { y: area.y + 1, height: 1, ..area };
-            let detail2_area = Rect { y: area.y + 2, height: 1, ..area };
+            let detail1_area = Rect {
+                y: area.y + 1,
+                height: 1,
+                ..area
+            };
+            let detail2_area = Rect {
+                y: area.y + 2,
+                height: 1,
+                ..area
+            };
 
             Paragraph::new(overview).render(overview_area, buf);
             Paragraph::new(detail1).render(detail1_area, buf);

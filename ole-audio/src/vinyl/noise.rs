@@ -11,9 +11,9 @@ pub struct VinylNoise {
     sample_rate: f32,
 
     // Noise levels (0.0-1.0)
-    surface_level: f32,   // Continuous hiss
-    crackle_level: f32,   // Random clicks
-    pop_level: f32,       // Occasional louder pops
+    surface_level: f32, // Continuous hiss
+    crackle_level: f32, // Random clicks
+    pop_level: f32,     // Occasional louder pops
 
     // PRNG state (deterministic, no allocation)
     random_state: u64,
@@ -38,7 +38,7 @@ impl VinylNoise {
         Self {
             enabled: false,
             sample_rate,
-            surface_level: 0.008,   // Very subtle
+            surface_level: 0.008, // Very subtle
             crackle_level: 0.015,
             pop_level: 0.04,
             random_state: 0xDEADBEEF_CAFEBABE,
@@ -135,7 +135,8 @@ impl VinylNoise {
         self.noise_filter_b1 = 0.99332 * self.noise_filter_b1 + white * 0.0750759;
         self.noise_filter_b2 = 0.96900 * self.noise_filter_b2 + white * 0.153_852;
 
-        let pink = self.noise_filter_b0 + self.noise_filter_b1 + self.noise_filter_b2 + white * 0.5362;
+        let pink =
+            self.noise_filter_b0 + self.noise_filter_b1 + self.noise_filter_b2 + white * 0.5362;
 
         // Normalize (pink noise has higher amplitude)
         pink * 0.11
@@ -260,7 +261,8 @@ mod tests {
         assert!(mean.abs() < 0.1);
 
         // Check that we have variation
-        let variance: f32 = samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / samples.len() as f32;
+        let variance: f32 =
+            samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / samples.len() as f32;
         assert!(variance > 0.001);
     }
 

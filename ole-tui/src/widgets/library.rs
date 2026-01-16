@@ -11,7 +11,10 @@ use ratatui::{
     layout::Rect,
     style::Modifier,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget},
+    widgets::{
+        Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget,
+        Widget,
+    },
 };
 
 /// State for the library widget
@@ -299,15 +302,10 @@ impl Widget for LibraryWidget<'_> {
         // Render scrollbar if needed
         if filtered.len() > list_height {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-            let mut scrollbar_state =
-                ScrollbarState::new(filtered.len()).position(scroll_offset);
+            let mut scrollbar_state = ScrollbarState::new(filtered.len()).position(scroll_offset);
 
-            let scrollbar_area = Rect::new(
-                inner.x + inner.width - 1,
-                inner.y + 1,
-                1,
-                inner.height - 1,
-            );
+            let scrollbar_area =
+                Rect::new(inner.x + inner.width - 1, inner.y + 1, 1, inner.height - 1);
             StatefulWidget::render(scrollbar, scrollbar_area, buf, &mut scrollbar_state);
         }
     }

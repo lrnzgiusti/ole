@@ -2,13 +2,89 @@
 
 use crate::theme::{Theme, CRT_AMBER, CRT_GREEN, CYBERPUNK};
 use crate::widgets::{LibraryState, ScopeMode};
-use ole_audio::{AudioEvent, DeckState, FilterType, FilterMode};
+use ole_audio::{AudioEvent, DeckState, FilterMode, FilterType};
 use ole_input::Mode;
 
 /// Number of spectrum bands
 pub const SPECTRUM_BANDS: usize = 32;
 /// Number of frames to keep in afterglow history
 const AFTERGLOW_HISTORY: usize = 15;
+
+/// CRT intensity preset levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CrtIntensity {
+    /// All CRT effects disabled
+    Off,
+    /// Subtle effects - barely noticeable
+    #[default]
+    Subtle,
+    /// Medium effects - noticeable but not distracting
+    Medium,
+    /// Heavy effects - strong retro feel
+    Heavy,
+}
+
+impl CrtIntensity {
+    /// Cycle to next intensity level
+    pub fn cycle(self) -> Self {
+        match self {
+            CrtIntensity::Off => CrtIntensity::Subtle,
+            CrtIntensity::Subtle => CrtIntensity::Medium,
+            CrtIntensity::Medium => CrtIntensity::Heavy,
+            CrtIntensity::Heavy => CrtIntensity::Off,
+        }
+    }
+
+    /// Get display name
+    pub fn name(self) -> &'static str {
+        match self {
+            CrtIntensity::Off => "OFF",
+            CrtIntensity::Subtle => "SUBTLE",
+            CrtIntensity::Medium => "MEDIUM",
+            CrtIntensity::Heavy => "HEAVY",
+        }
+    }
+
+    /// Get scanline intensity for this preset (0.0-1.0)
+    pub fn scanline_intensity(self) -> f32 {
+        match self {
+            CrtIntensity::Off => 0.0,
+            CrtIntensity::Subtle => 0.20,
+            CrtIntensity::Medium => 0.40,
+            CrtIntensity::Heavy => 0.60,
+        }
+    }
+
+    /// Get glow intensity for this preset (0.0-1.0)
+    pub fn glow_intensity(self) -> f32 {
+        match self {
+            CrtIntensity::Off => 0.0,
+            CrtIntensity::Subtle => 0.3,
+            CrtIntensity::Medium => 0.5,
+            CrtIntensity::Heavy => 0.7,
+        }
+    }
+
+    /// Get noise intensity for this preset (0.0-1.0)
+    pub fn noise_intensity(self) -> f32 {
+        match self {
+            CrtIntensity::Off => 0.0,
+            CrtIntensity::Subtle => 0.02,
+            CrtIntensity::Medium => 0.05,
+            CrtIntensity::Heavy => 0.10,
+        }
+    }
+
+    /// Get chromatic aberration offset for this preset (pixels)
+    pub fn chromatic_offset(self) -> u8 {
+        match self {
+            CrtIntensity::Off => 0,
+            CrtIntensity::Subtle => 1,
+            CrtIntensity::Medium => 2,
+            CrtIntensity::Heavy => 3,
+        }
+    }
+}
 
 /// CRT visual effects state for phosphor persistence and other retro effects
 #[derive(Debug, Clone)]
@@ -31,10 +107,33 @@ pub struct CrtEffects {
     pub scanline_offset: u8,
     /// Whether scanlines are enabled
     pub scanlines_enabled: bool,
+
+    // --- New CRT screen effects ---
+    /// Master toggle for all CRT post-processing effects
+    pub crt_enabled: bool,
+
+    /// Current CRT intensity preset
+    pub intensity: CrtIntensity,
+
+    /// Phosphor glow enabled
+    pub glow_enabled: bool,
+    /// Phosphor glow intensity (0.0-1.0)
+    pub glow_intensity: f32,
+
+    /// Static/noise enabled
+    pub noise_enabled: bool,
+    /// Static/noise intensity (0.0-1.0)
+    pub noise_intensity: f32,
+
+    /// Chromatic aberration enabled
+    pub chromatic_enabled: bool,
+    /// Chromatic aberration offset in pixels (1-3)
+    pub chromatic_offset: u8,
 }
 
 impl Default for CrtEffects {
     fn default() -> Self {
+        let intensity = CrtIntensity::default();
         Self {
             spectrum_history: [[0.0; AFTERGLOW_HISTORY]; SPECTRUM_BANDS],
             spectrum_history_idx: 0,
@@ -46,6 +145,15 @@ impl Default for CrtEffects {
             flicker_intensity: 0.0,
             scanline_offset: 0,
             scanlines_enabled: true,
+            // New CRT effects - most disabled by default to prevent visual artifacts
+            crt_enabled: true,
+            intensity,
+            glow_enabled: false,      // Disabled by default - causes color bleeding
+            glow_intensity: intensity.glow_intensity(),
+            noise_enabled: false,     // Disabled by default - causes visual artifacts
+            noise_intensity: intensity.noise_intensity(),
+            chromatic_enabled: false, // Disabled by default - causes color shifting on UI elements
+            chromatic_offset: intensity.chromatic_offset(),
         }
     }
 }
@@ -107,13 +215,44 @@ impl CrtEffects {
     }
 
     /// Update scanline offset for rolling effect
+    /// Note: Rolling disabled to prevent visual flickering on waveforms
     pub fn update_scanlines(&mut self) {
-        self.scanline_offset = self.scanline_offset.wrapping_add(1);
+        // Rolling scanlines disabled - causes flickering on waveforms
+        // self.scanline_offset = self.scanline_offset.wrapping_add(1);
     }
 
     /// Toggle scanlines on/off
     pub fn toggle_scanlines(&mut self) {
         self.scanlines_enabled = !self.scanlines_enabled;
+    }
+
+    /// Toggle all CRT post-processing effects (master switch)
+    pub fn toggle_crt(&mut self) {
+        self.crt_enabled = !self.crt_enabled;
+    }
+
+    /// Toggle phosphor glow effect
+    pub fn toggle_glow(&mut self) {
+        self.glow_enabled = !self.glow_enabled;
+    }
+
+    /// Toggle static/noise effect
+    pub fn toggle_noise(&mut self) {
+        self.noise_enabled = !self.noise_enabled;
+    }
+
+    /// Toggle chromatic aberration effect
+    pub fn toggle_chromatic(&mut self) {
+        self.chromatic_enabled = !self.chromatic_enabled;
+    }
+
+    /// Cycle through CRT intensity presets (Off -> Subtle -> Medium -> Heavy -> Off)
+    pub fn cycle_intensity(&mut self) {
+        self.intensity = self.intensity.cycle();
+        // Update all effect parameters based on preset
+        self.glow_intensity = self.intensity.glow_intensity();
+        self.noise_intensity = self.intensity.noise_intensity();
+        self.chromatic_offset = self.intensity.chromatic_offset();
     }
 }
 
@@ -492,10 +631,12 @@ impl AppState {
     /// Update all CRT effects (call each frame after audio state update)
     pub fn update_crt_effects(&mut self) {
         // Update peak hold with current deck audio levels (not gain setting!)
-        self.crt_effects.update_peak_hold(self.deck_a.peak_level, self.deck_b.peak_level);
+        self.crt_effects
+            .update_peak_hold(self.deck_a.peak_level, self.deck_b.peak_level);
 
         // Update spectrum history with current spectrum data
-        self.crt_effects.update_spectrum_history(&self.deck_a.spectrum.bands);
+        self.crt_effects
+            .update_spectrum_history(&self.deck_a.spectrum.bands);
 
         // Update flicker decay
         self.crt_effects.update_flicker();
@@ -506,8 +647,8 @@ impl AppState {
 
     /// Update beat pulse animation state (call each frame)
     pub fn update_beat_pulse(&mut self) {
-        const PULSE_DECAY: f32 = 0.85;  // How fast the pulse fades (per frame)
-        const PULSE_INTENSITY: f32 = 1.0;  // Initial pulse brightness
+        const PULSE_DECAY: f32 = 0.85; // How fast the pulse fades (per frame)
+        const PULSE_INTENSITY: f32 = 1.0; // Initial pulse brightness
 
         // Check for downbeat crossing on deck A
         // Downbeat is when phase wraps from high (>0.9) to low (<0.1)
@@ -541,8 +682,16 @@ impl AppState {
     /// - 0.0 = completely out of sync (180° out of phase)
     pub fn calculate_sync_quality(&self) -> f32 {
         // Need both decks with beat grids to calculate sync
-        let has_grid_a = self.deck_a.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
-        let has_grid_b = self.deck_b.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
+        let has_grid_a = self
+            .deck_a
+            .beat_grid_info
+            .as_ref()
+            .is_some_and(|g| g.has_grid);
+        let has_grid_b = self
+            .deck_b
+            .beat_grid_info
+            .as_ref()
+            .is_some_and(|g| g.has_grid);
 
         if !has_grid_a || !has_grid_b {
             return 0.0;
@@ -551,7 +700,11 @@ impl AppState {
         // Calculate phase difference (0.0-1.0)
         let phase_diff = (self.deck_a.beat_phase - self.deck_b.beat_phase).abs();
         // Normalize: 0.5 diff = furthest apart, 0.0 or 1.0 = in sync
-        let normalized_diff = if phase_diff > 0.5 { 1.0 - phase_diff } else { phase_diff };
+        let normalized_diff = if phase_diff > 0.5 {
+            1.0 - phase_diff
+        } else {
+            phase_diff
+        };
         // Convert to quality: 0.0 diff = 1.0 quality, 0.5 diff = 0.0 quality
         1.0 - (normalized_diff * 2.0)
     }

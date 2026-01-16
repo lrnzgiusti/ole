@@ -8,15 +8,21 @@
 //! - Timestretcher: Phase vocoder for pitch-independent tempo
 
 mod deck;
-mod mixer;
 mod effects;
 mod engine;
-mod vinyl;
+mod mixer;
 pub mod timestretcher;
+mod vinyl;
 
-pub use deck::{Deck, DeckState, PlaybackState, BeatGridInfo, SyncTransition, SCOPE_SAMPLES_SIZE};
-pub use mixer::{Mixer, CrossfaderCurve};
-pub use effects::{Effect, Filter, FilterType, FilterMode, LadderFilter, StateVariableFilter, SvfOutputType, Delay, DelayInterpolation, DelayModulation, Reverb};
-pub use engine::{AudioEngine, AudioCommand, AudioEvent, EngineState};
-pub use vinyl::{VinylEmulator, VinylPreset, TurntableMotor, WowFlutter, AnalogWarmth, SaturationType, VinylNoise};
-pub use timestretcher::{PhaseVocoder, PhaseLockMode, FftSize, TimeStretchParams};
+pub use deck::{BeatGridInfo, Deck, DeckState, PlaybackState, SyncTransition, SCOPE_SAMPLES_SIZE};
+pub use effects::{
+    Delay, DelayInterpolation, DelayModulation, Effect, Filter, FilterMode, FilterType,
+    LadderFilter, Reverb, StateVariableFilter, SvfOutputType,
+};
+pub use engine::{AudioCommand, AudioEngine, AudioEvent, EngineState};
+pub use mixer::{CrossfaderCurve, Mixer};
+pub use timestretcher::{FftSize, PhaseLockMode, PhaseVocoder, TimeStretchParams};
+pub use vinyl::{
+    AnalogWarmth, SaturationType, TurntableMotor, VinylEmulator, VinylNoise, VinylPreset,
+    WowFlutter,
+};

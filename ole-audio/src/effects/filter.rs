@@ -16,8 +16,8 @@ pub enum FilterType {
 pub struct Filter {
     filter_type: FilterType,
     sample_rate: f32,
-    cutoff: f32,       // Hz
-    resonance: f32,    // Q factor
+    cutoff: f32,    // Hz
+    resonance: f32, // Q factor
     enabled: bool,
 
     // Biquad coefficients
@@ -28,10 +28,14 @@ pub struct Filter {
     b2: f32,
 
     // State variables (stereo)
-    x1_l: f32, x2_l: f32,
-    y1_l: f32, y2_l: f32,
-    x1_r: f32, x2_r: f32,
-    y1_r: f32, y2_r: f32,
+    x1_l: f32,
+    x2_l: f32,
+    y1_l: f32,
+    y2_l: f32,
+    x1_r: f32,
+    x2_r: f32,
+    y1_r: f32,
+    y2_r: f32,
 }
 
 impl Filter {
@@ -43,12 +47,19 @@ impl Filter {
             cutoff: 1000.0,
             resonance: 0.707, // Butterworth Q
             enabled: false,
-            a0: 1.0, a1: 0.0, a2: 0.0,
-            b1: 0.0, b2: 0.0,
-            x1_l: 0.0, x2_l: 0.0,
-            y1_l: 0.0, y2_l: 0.0,
-            x1_r: 0.0, x2_r: 0.0,
-            y1_r: 0.0, y2_r: 0.0,
+            a0: 1.0,
+            a1: 0.0,
+            a2: 0.0,
+            b1: 0.0,
+            b2: 0.0,
+            x1_l: 0.0,
+            x2_l: 0.0,
+            y1_l: 0.0,
+            y2_l: 0.0,
+            x1_r: 0.0,
+            x2_r: 0.0,
+            y1_r: 0.0,
+            y2_r: 0.0,
         };
         filter.calculate_coefficients();
         filter
@@ -143,13 +154,23 @@ impl Filter {
     /// Process a single sample (mono)
     fn process_sample(&mut self, input: f32, is_right: bool) -> f32 {
         let (x1, x2, y1, y2) = if is_right {
-            (&mut self.x1_r, &mut self.x2_r, &mut self.y1_r, &mut self.y2_r)
+            (
+                &mut self.x1_r,
+                &mut self.x2_r,
+                &mut self.y1_r,
+                &mut self.y2_r,
+            )
         } else {
-            (&mut self.x1_l, &mut self.x2_l, &mut self.y1_l, &mut self.y2_l)
+            (
+                &mut self.x1_l,
+                &mut self.x2_l,
+                &mut self.y1_l,
+                &mut self.y2_l,
+            )
         };
 
-        let output = self.a0 * input + self.a1 * *x1 + self.a2 * *x2
-                    - self.b1 * *y1 - self.b2 * *y2;
+        let output =
+            self.a0 * input + self.a1 * *x1 + self.a2 * *x2 - self.b1 * *y1 - self.b2 * *y2;
 
         *x2 = *x1;
         *x1 = input;
@@ -175,10 +196,14 @@ impl Effect for Filter {
     }
 
     fn reset(&mut self) {
-        self.x1_l = 0.0; self.x2_l = 0.0;
-        self.y1_l = 0.0; self.y2_l = 0.0;
-        self.x1_r = 0.0; self.x2_r = 0.0;
-        self.y1_r = 0.0; self.y2_r = 0.0;
+        self.x1_l = 0.0;
+        self.x2_l = 0.0;
+        self.y1_l = 0.0;
+        self.y2_l = 0.0;
+        self.x1_r = 0.0;
+        self.x2_r = 0.0;
+        self.y1_r = 0.0;
+        self.y2_r = 0.0;
     }
 
     fn is_enabled(&self) -> bool {

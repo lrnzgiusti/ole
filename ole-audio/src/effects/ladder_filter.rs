@@ -16,9 +16,9 @@ pub struct LadderFilter {
     sample_rate: f32,
 
     // Parameters
-    cutoff: f32,      // Hz (20-20000)
-    resonance: f32,   // 0.0-1.0 (self-oscillation at ~0.95)
-    drive: f32,       // Input saturation 0.0-1.0
+    cutoff: f32,    // Hz (20-20000)
+    resonance: f32, // 0.0-1.0 (self-oscillation at ~0.95)
+    drive: f32,     // Input saturation 0.0-1.0
 
     // 4-pole filter state (stereo)
     stage_l: [f32; 4],
@@ -124,9 +124,19 @@ impl LadderFilter {
     fn process_sample(&mut self, input: f32, is_right: bool) -> f32 {
         // Select channel state
         let (stage, delay, feedback, thermal) = if is_right {
-            (&mut self.stage_r, &mut self.delay_r, &mut self.feedback_r, &mut self.thermal_r)
+            (
+                &mut self.stage_r,
+                &mut self.delay_r,
+                &mut self.feedback_r,
+                &mut self.thermal_r,
+            )
         } else {
-            (&mut self.stage_l, &mut self.delay_l, &mut self.feedback_l, &mut self.thermal_l)
+            (
+                &mut self.stage_l,
+                &mut self.delay_l,
+                &mut self.feedback_l,
+                &mut self.thermal_l,
+            )
         };
 
         // Calculate normalized frequency (0-1, where 1 = Nyquist)

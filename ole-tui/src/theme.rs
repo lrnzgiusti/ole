@@ -28,6 +28,16 @@ pub struct Theme {
     pub scanline_spacing: u8,
     /// Scanline intensity (0.0-1.0, how much to dim)
     pub scanline_intensity: f32,
+
+    // --- CRT Post-Processing Parameters ---
+    /// Glow radius (1-2 cells around bright elements)
+    pub glow_radius: u8,
+    /// Brightness threshold to trigger glow (0-255, higher = fewer glowing elements)
+    pub glow_threshold: u8,
+    /// Noise density (0.0-1.0, chance per cell to show noise)
+    pub noise_density: f32,
+    /// Default chromatic aberration offset
+    pub chromatic_offset: u8,
 }
 
 impl Theme {
@@ -129,15 +139,24 @@ impl Theme {
     pub fn afterglow(&self, base_color: Color, decay_factor: f32) -> Style {
         let factor = decay_factor.clamp(0.0, 1.0);
         if factor < 0.05 {
-            return Style::default().fg(self.bg);  // Invisible
+            return Style::default().fg(self.bg); // Invisible
         }
 
         match base_color {
             Color::Rgb(r, g, b) => {
                 // Interpolate toward background with reduced brightness
-                let bg_r = match self.bg { Color::Rgb(r, _, _) => r, _ => 0 };
-                let bg_g = match self.bg { Color::Rgb(_, g, _) => g, _ => 0 };
-                let bg_b = match self.bg { Color::Rgb(_, _, b) => b, _ => 0 };
+                let bg_r = match self.bg {
+                    Color::Rgb(r, _, _) => r,
+                    _ => 0,
+                };
+                let bg_g = match self.bg {
+                    Color::Rgb(_, g, _) => g,
+                    _ => 0,
+                };
+                let bg_b = match self.bg {
+                    Color::Rgb(_, _, b) => b,
+                    _ => 0,
+                };
 
                 // Apply decay and blend toward background
                 let new_r = (bg_r as f32 + (r as f32 - bg_r as f32) * factor * 0.6) as u8;
@@ -146,7 +165,7 @@ impl Theme {
 
                 Style::default().fg(Color::Rgb(new_r, new_g, new_b))
             }
-            _ => self.dim()
+            _ => self.dim(),
         }
     }
 
@@ -167,33 +186,43 @@ impl Theme {
 /// Classic phosphor green CRT theme
 pub const CRT_GREEN: Theme = Theme {
     name: "phosphor-green",
-    fg: Color::Rgb(51, 255, 51),        // #33ff33 - phosphor green
-    fg_dim: Color::Rgb(25, 128, 25),    // dimmed green
-    bg: Color::Rgb(0, 10, 0),           // near black with green tint
+    fg: Color::Rgb(51, 255, 51),          // #33ff33 - phosphor green
+    fg_dim: Color::Rgb(25, 128, 25),      // dimmed green
+    bg: Color::Rgb(0, 10, 0),             // near black with green tint
     highlight: Color::Rgb(180, 255, 180), // bright green
-    accent: Color::Rgb(100, 255, 100),  // medium green
-    warning: Color::Rgb(255, 255, 100), // yellow-green
-    danger: Color::Rgb(255, 100, 100),  // red warning
-    deck_a: Color::Rgb(100, 255, 150),  // green-cyan
-    deck_b: Color::Rgb(150, 255, 100),  // yellow-green
-    scanline_spacing: 3,                // Classic CRT scanlines
-    scanline_intensity: 0.3,            // Subtle effect
+    accent: Color::Rgb(100, 255, 100),    // medium green
+    warning: Color::Rgb(255, 255, 100),   // yellow-green
+    danger: Color::Rgb(255, 100, 100),    // red warning
+    deck_a: Color::Rgb(100, 255, 150),    // green-cyan
+    deck_b: Color::Rgb(150, 255, 100),    // yellow-green
+    scanline_spacing: 3,                  // Classic CRT scanlines
+    scanline_intensity: 0.3,              // Subtle effect
+    // CRT post-processing
+    glow_radius: 1,      // Single cell glow
+    glow_threshold: 180, // Glow on bright elements
+    noise_density: 0.05, // 5% chance per cell
+    chromatic_offset: 1, // Subtle color fringe
 };
 
 /// Amber CRT theme (1980s monochrome)
 pub const CRT_AMBER: Theme = Theme {
     name: "amber",
-    fg: Color::Rgb(255, 176, 0),        // #ffb000 - amber
-    fg_dim: Color::Rgb(128, 88, 0),     // dimmed amber
-    bg: Color::Rgb(10, 5, 0),           // near black with amber tint
+    fg: Color::Rgb(255, 176, 0),          // #ffb000 - amber
+    fg_dim: Color::Rgb(128, 88, 0),       // dimmed amber
+    bg: Color::Rgb(10, 5, 0),             // near black with amber tint
     highlight: Color::Rgb(255, 220, 128), // bright amber
-    accent: Color::Rgb(255, 200, 64),   // medium amber
-    warning: Color::Rgb(255, 255, 100), // yellow
-    danger: Color::Rgb(255, 100, 100),  // red warning
-    deck_a: Color::Rgb(255, 180, 50),   // orange-amber
-    deck_b: Color::Rgb(255, 220, 100),  // yellow-amber
-    scanline_spacing: 3,                // Classic CRT scanlines
-    scanline_intensity: 0.4,            // More visible on amber
+    accent: Color::Rgb(255, 200, 64),     // medium amber
+    warning: Color::Rgb(255, 255, 100),   // yellow
+    danger: Color::Rgb(255, 100, 100),    // red warning
+    deck_a: Color::Rgb(255, 180, 50),     // orange-amber
+    deck_b: Color::Rgb(255, 220, 100),    // yellow-amber
+    scanline_spacing: 3,                  // Classic CRT scanlines
+    scanline_intensity: 0.4,              // More visible on amber
+    // CRT post-processing
+    glow_radius: 1,      // Single cell glow
+    glow_threshold: 160, // Slightly more glow (amber is warm)
+    noise_density: 0.04, // 4% chance per cell
+    chromatic_offset: 1, // Subtle color fringe
 };
 
 /// Cyberpunk neon theme
@@ -210,6 +239,11 @@ pub const CYBERPUNK: Theme = Theme {
     deck_b: Color::Rgb(100, 255, 255),  // light cyan
     scanline_spacing: 2,                // Tighter scanlines for sharp look
     scanline_intensity: 0.2,            // Subtle - let neon pop
+    // CRT post-processing - more aggressive for cyberpunk aesthetic
+    glow_radius: 2,      // Wider glow for neon effect
+    glow_threshold: 150, // More glow (neon should bloom)
+    noise_density: 0.03, // Less noise (cleaner digital look)
+    chromatic_offset: 2, // More color fringe for glitchy feel
 };
 
 impl Default for Theme {

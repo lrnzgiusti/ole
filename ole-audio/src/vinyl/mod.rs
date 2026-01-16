@@ -7,14 +7,14 @@
 //! - Vinyl noise (surface noise, crackle, pops)
 
 mod motor;
-mod wow_flutter;
-mod warmth;
 mod noise;
+mod warmth;
+mod wow_flutter;
 
 pub use motor::TurntableMotor;
-pub use wow_flutter::WowFlutter;
-pub use warmth::{AnalogWarmth, SaturationType};
 pub use noise::VinylNoise;
+pub use warmth::{AnalogWarmth, SaturationType};
+pub use wow_flutter::WowFlutter;
 
 /// Complete vinyl emulation system
 ///

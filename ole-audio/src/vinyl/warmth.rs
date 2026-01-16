@@ -63,7 +63,7 @@ pub struct AnalogWarmth {
     riaa_high_r: BiquadState,
 
     // Saturation
-    drive: f32,           // 0.0-1.0 (amount of saturation)
+    drive: f32, // 0.0-1.0 (amount of saturation)
     saturation_type: SaturationType,
 
     // Compression
@@ -100,8 +100,16 @@ impl AnalogWarmth {
             enabled: false,
             sample_rate,
             riaa_coeffs: RiaaCoeffs {
-                low_a0: 1.0, low_a1: 0.0, low_a2: 0.0, low_b1: 0.0, low_b2: 0.0,
-                high_a0: 1.0, high_a1: 0.0, high_a2: 0.0, high_b1: 0.0, high_b2: 0.0,
+                low_a0: 1.0,
+                low_a1: 0.0,
+                low_a2: 0.0,
+                low_b1: 0.0,
+                low_b2: 0.0,
+                high_a0: 1.0,
+                high_a1: 0.0,
+                high_a2: 0.0,
+                high_b1: 0.0,
+                high_b2: 0.0,
             },
             riaa_low_l: BiquadState::default(),
             riaa_low_r: BiquadState::default(),
@@ -213,9 +221,11 @@ impl AnalogWarmth {
         let alpha_high = sin_high / 2.0 * (2.0f32).sqrt();
         let a_high = gain_high.sqrt();
 
-        let b0 = a_high * ((a_high + 1.0) + (a_high - 1.0) * cos_high + 2.0 * a_high.sqrt() * alpha_high);
+        let b0 = a_high
+            * ((a_high + 1.0) + (a_high - 1.0) * cos_high + 2.0 * a_high.sqrt() * alpha_high);
         let b1 = -2.0 * a_high * ((a_high - 1.0) + (a_high + 1.0) * cos_high);
-        let b2 = a_high * ((a_high + 1.0) + (a_high - 1.0) * cos_high - 2.0 * a_high.sqrt() * alpha_high);
+        let b2 = a_high
+            * ((a_high + 1.0) + (a_high - 1.0) * cos_high - 2.0 * a_high.sqrt() * alpha_high);
         let a0 = (a_high + 1.0) - (a_high - 1.0) * cos_high + 2.0 * a_high.sqrt() * alpha_high;
         let a1 = 2.0 * ((a_high - 1.0) - (a_high + 1.0) * cos_high);
         let a2 = (a_high + 1.0) - (a_high - 1.0) * cos_high - 2.0 * a_high.sqrt() * alpha_high;

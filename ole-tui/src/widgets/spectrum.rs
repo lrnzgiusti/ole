@@ -1,5 +1,6 @@
 //! Spectrum analyzer widget - FFT visualization
 
+use crate::theme::Theme;
 use ole_analysis::{SpectrumData, SPECTRUM_BANDS};
 use ratatui::{
     buffer::Buffer,
@@ -7,7 +8,6 @@ use ratatui::{
     text::Span,
     widgets::{Block, Borders, Widget},
 };
-use crate::theme::Theme;
 
 /// Characters for vertical bar rendering (8 levels)
 const BAR_CHARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -29,7 +29,11 @@ pub struct SpectrumWidget<'a> {
 }
 
 impl<'a> SpectrumWidget<'a> {
-    pub fn new(spectrum_a: &'a SpectrumData, spectrum_b: &'a SpectrumData, theme: &'a Theme) -> Self {
+    pub fn new(
+        spectrum_a: &'a SpectrumData,
+        spectrum_b: &'a SpectrumData,
+        theme: &'a Theme,
+    ) -> Self {
         Self {
             spectrum_a,
             spectrum_b,
@@ -48,7 +52,11 @@ impl<'a> SpectrumWidget<'a> {
     }
 
     /// Set phosphor afterglow history for CRT persistence effect
-    pub fn afterglow(mut self, history: &'a [[f32; AFTERGLOW_HISTORY]; SPECTRUM_BANDS], idx: usize) -> Self {
+    pub fn afterglow(
+        mut self,
+        history: &'a [[f32; AFTERGLOW_HISTORY]; SPECTRUM_BANDS],
+        idx: usize,
+    ) -> Self {
         self.afterglow_history = Some(history);
         self.afterglow_history_idx = idx;
         self
@@ -106,7 +114,9 @@ impl Widget for SpectrumWidget<'_> {
         };
 
         let title_style = if self.sync_quality > 0.95 {
-            Style::default().fg(self.theme.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(self.theme.accent)
+                .add_modifier(Modifier::BOLD)
         } else if self.sync_quality > 0.80 {
             Style::default().fg(self.theme.warning)
         } else {
@@ -138,7 +148,8 @@ impl Widget for SpectrumWidget<'_> {
         if let Some(history) = self.afterglow_history {
             // Render from oldest to newest (oldest = dimmest, rendered first so newer overwrites)
             for age in (1..AFTERGLOW_HISTORY).rev() {
-                let hist_idx = (self.afterglow_history_idx + AFTERGLOW_HISTORY - age) % AFTERGLOW_HISTORY;
+                let hist_idx =
+                    (self.afterglow_history_idx + AFTERGLOW_HISTORY - age) % AFTERGLOW_HISTORY;
                 let decay = 1.0 - (age as f32 / AFTERGLOW_HISTORY as f32);
 
                 // Skip very dim ghosts
@@ -156,7 +167,9 @@ impl Widget for SpectrumWidget<'_> {
 
                     let ghost_bar = Self::render_bar(ghost_mag, height as u16);
                     let x = inner.x + (start_x + band * band_width) as u16;
-                    let ghost_style = self.theme.spectrum_afterglow(band_idx, SPECTRUM_BANDS, decay);
+                    let ghost_style =
+                        self.theme
+                            .spectrum_afterglow(band_idx, SPECTRUM_BANDS, decay);
 
                     for (row, &ch) in ghost_bar.iter().enumerate().take(height) {
                         let y = inner.y + inner.height - 1 - row as u16;

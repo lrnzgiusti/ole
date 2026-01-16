@@ -17,16 +17,16 @@ pub struct TurntableMotor {
     current_speed: f32,
 
     // Physics parameters
-    startup_time: f32,  // Seconds to reach full speed (0.5-2.0)
-    brake_time: f32,    // Seconds to stop (0.3-1.0)
+    startup_time: f32, // Seconds to reach full speed (0.5-2.0)
+    brake_time: f32,   // Seconds to stop (0.3-1.0)
 
     // State
     is_running: bool,
 
     // Pitch drift (subtle analog imperfection)
     drift_phase: f32,
-    drift_rate: f32,    // Hz (very slow, ~0.1)
-    drift_amount: f32,  // Fraction of pitch (0.001 = 0.1%)
+    drift_rate: f32,   // Hz (very slow, ~0.1)
+    drift_amount: f32, // Fraction of pitch (0.001 = 0.1%)
 }
 
 impl TurntableMotor {
@@ -35,7 +35,7 @@ impl TurntableMotor {
         Self {
             sample_rate,
             target_speed: 1.0,
-            current_speed: 1.0,  // Start at full speed (already playing)
+            current_speed: 1.0, // Start at full speed (already playing)
             startup_time: 0.8,
             brake_time: 0.5,
             is_running: true,

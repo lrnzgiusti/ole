@@ -1,5 +1,6 @@
 //! Phase meter widget - shows beat alignment between decks
 
+use crate::theme::Theme;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -7,18 +8,17 @@ use ratatui::{
     text::Span,
     widgets::{Block, Borders, Widget},
 };
-use crate::theme::Theme;
 
 /// Widget for displaying beat phase alignment between two decks
 ///
 /// Shows a horizontal track with a marker indicating the phase difference.
 /// When decks are in sync, the marker is centered.
 pub struct PhaseWidget<'a> {
-    phase_a: f32,  // Beat phase of deck A (0.0-1.0)
-    phase_b: f32,  // Beat phase of deck B (0.0-1.0)
+    phase_a: f32, // Beat phase of deck A (0.0-1.0)
+    phase_b: f32, // Beat phase of deck B (0.0-1.0)
     theme: &'a Theme,
-    has_grid_a: bool,  // Whether deck A has a beat grid
-    has_grid_b: bool,  // Whether deck B has a beat grid
+    has_grid_a: bool, // Whether deck A has a beat grid
+    has_grid_b: bool, // Whether deck B has a beat grid
 }
 
 impl<'a> PhaseWidget<'a> {
@@ -96,7 +96,7 @@ impl Widget for PhaseWidget<'_> {
 
         // Calculate phase difference and determine sync quality
         let phase_diff = self.phase_difference();
-        let sync_quality = 1.0 - (phase_diff.abs() * 2.0).min(1.0);  // 1.0 = perfect, 0.0 = 180° out
+        let sync_quality = 1.0 - (phase_diff.abs() * 2.0).min(1.0); // 1.0 = perfect, 0.0 = 180° out
 
         // Determine style based on sync quality
         let (marker_style, status) = if sync_quality > 0.95 {
@@ -115,7 +115,7 @@ impl Widget for PhaseWidget<'_> {
 
         // Build the phase meter track
         // Layout: A ○━━━━━━━●━━━━━━━○ B
-        let track_width = width.saturating_sub(6);  // Leave room for "A " and " B"
+        let track_width = width.saturating_sub(6); // Leave room for "A " and " B"
 
         // Calculate marker position on the track
         // phase_diff of -0.5 to 0.5 maps to 0 to track_width-1
@@ -125,7 +125,9 @@ impl Widget for PhaseWidget<'_> {
 
         // Render "A " label
         let mut x = inner.x;
-        buf[(x, y)].set_char('A').set_style(self.theme.deck_a_style());
+        buf[(x, y)]
+            .set_char('A')
+            .set_style(self.theme.deck_a_style());
         x += 1;
         buf[(x, y)].set_char(' ').set_style(self.theme.normal());
         x += 1;
@@ -133,13 +135,13 @@ impl Widget for PhaseWidget<'_> {
         // Render the track with center anchor
         for i in 0..track_width {
             let ch = if i == marker_pos {
-                '●'  // Phase marker
+                '●' // Phase marker
             } else if i == center {
-                '┼'  // Center marker (sync point)
+                '┼' // Center marker (sync point)
             } else if i == 0 || i == track_width - 1 {
-                '○'  // End anchors
+                '○' // End anchors
             } else {
-                '━'  // Track
+                '━' // Track
             };
 
             let style = if i == marker_pos {
@@ -157,7 +159,9 @@ impl Widget for PhaseWidget<'_> {
         // Render " B" label
         buf[(x, y)].set_char(' ').set_style(self.theme.normal());
         x += 1;
-        buf[(x, y)].set_char('B').set_style(self.theme.deck_b_style());
+        buf[(x, y)]
+            .set_char('B')
+            .set_style(self.theme.deck_b_style());
 
         // Render status text on the line above (if we have space)
         if inner.height >= 2 && !status.is_empty() {

@@ -13,13 +13,13 @@ pub struct WowFlutter {
     sample_rate: f32,
 
     // Wow (slow wobble from platter eccentricity)
-    wow_rate: f32,       // Hz (0.5-2.0)
-    wow_depth: f32,      // Semitones (0-0.5)
+    wow_rate: f32,  // Hz (0.5-2.0)
+    wow_depth: f32, // Semitones (0-0.5)
     wow_phase: f32,
 
     // Flutter (faster wobble from motor/belt)
-    flutter_rate: f32,   // Hz (5-15)
-    flutter_depth: f32,  // Semitones (0-0.15)
+    flutter_rate: f32,  // Hz (5-15)
+    flutter_depth: f32, // Semitones (0-0.15)
     flutter_phase: f32,
 
     // Secondary flutter for complexity
@@ -236,7 +236,13 @@ mod tests {
             let x = i as f32 * 0.01;
             let fast = fast_pow2(x);
             let real = 2.0f32.powf(x);
-            assert!((fast - real).abs() < 0.001, "fast_pow2({}) = {}, expected {}", x, fast, real);
+            assert!(
+                (fast - real).abs() < 0.001,
+                "fast_pow2({}) = {}, expected {}",
+                x,
+                fast,
+                real
+            );
         }
     }
 }

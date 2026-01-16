@@ -323,11 +323,7 @@ impl CamelotKey {
 
     /// Get display string (e.g., "8A", "12B")
     pub fn display(&self) -> String {
-        format!(
-            "{}{}",
-            self.number,
-            if self.is_major { 'B' } else { 'A' }
-        )
+        format!("{}{}", self.number, if self.is_major { 'B' } else { 'A' })
     }
 
     /// Parse from string (e.g., "8A", "12B")
@@ -428,8 +424,16 @@ impl CamelotKey {
         });
 
         // Adjacent on wheel (same letter)
-        let prev = if self.number == 1 { 12 } else { self.number - 1 };
-        let next = if self.number == 12 { 1 } else { self.number + 1 };
+        let prev = if self.number == 1 {
+            12
+        } else {
+            self.number - 1
+        };
+        let next = if self.number == 12 {
+            1
+        } else {
+            self.number + 1
+        };
 
         keys.push(CamelotKey {
             number: prev,

@@ -112,7 +112,10 @@ impl SpectrumAnalyzer {
         }
 
         // Apply smoothing
-        for (mag, prev) in magnitudes.iter_mut().zip(self.previous_magnitudes.iter_mut()) {
+        for (mag, prev) in magnitudes
+            .iter_mut()
+            .zip(self.previous_magnitudes.iter_mut())
+        {
             *mag = *prev * self.smoothing + *mag * (1.0 - self.smoothing);
             *prev = *mag;
         }
