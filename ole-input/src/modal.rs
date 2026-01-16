@@ -107,19 +107,44 @@ impl InputHandler {
             // Focus navigation
             KeyCode::Tab => Some(Command::CycleFocus),
 
-            // Beatjump on focused deck (Up/Down arrows)
-            KeyCode::Up => Some(Command::Beatjump(self.focused_deck, 4)),    // Forward 4 beats
-            KeyCode::Down => Some(Command::Beatjump(self.focused_deck, -4)), // Back 4 beats
+            // Visualization toggle (spectrum <-> oscilloscope)
+            KeyCode::Char('v') => Some(Command::ToggleScope),
+            KeyCode::Char('V') => Some(Command::CycleScopeMode),
 
-            // Cue points on focused deck (1-4 to jump, Shift+1-4 to set)
+            // Waveform zoom on focused deck
+            KeyCode::Char('w') => Some(Command::ZoomIn(self.focused_deck)),
+            KeyCode::Char('W') => Some(Command::ZoomOut(self.focused_deck)),
+
+            // Beatjump on focused deck - multiple presets
+            // j/k = 1 beat, Up/Down = 4 beats, J/K = 8 beats, n/N = 16 beats, m/M = 32 beats
+            KeyCode::Char('j') => Some(Command::Beatjump(self.focused_deck, 1)),     // Forward 1 beat
+            KeyCode::Char('k') => Some(Command::Beatjump(self.focused_deck, -1)),    // Back 1 beat
+            KeyCode::Up => Some(Command::Beatjump(self.focused_deck, 4)),            // Forward 4 beats
+            KeyCode::Down => Some(Command::Beatjump(self.focused_deck, -4)),         // Back 4 beats
+            KeyCode::Char('J') => Some(Command::Beatjump(self.focused_deck, 8)),     // Forward 8 beats
+            KeyCode::Char('K') => Some(Command::Beatjump(self.focused_deck, -8)),    // Back 8 beats
+            KeyCode::Char('n') => Some(Command::Beatjump(self.focused_deck, 16)),    // Forward 16 beats
+            KeyCode::Char('N') => Some(Command::Beatjump(self.focused_deck, -16)),   // Back 16 beats
+            KeyCode::Char('m') => Some(Command::Beatjump(self.focused_deck, 32)),    // Forward 32 beats
+            KeyCode::Char('M') => Some(Command::Beatjump(self.focused_deck, -32)),   // Back 32 beats
+
+            // Cue points on focused deck (1-8 to jump, Shift+1-8 to set)
             KeyCode::Char('1') => Some(Command::JumpCue(self.focused_deck, 1)),
             KeyCode::Char('2') => Some(Command::JumpCue(self.focused_deck, 2)),
             KeyCode::Char('3') => Some(Command::JumpCue(self.focused_deck, 3)),
             KeyCode::Char('4') => Some(Command::JumpCue(self.focused_deck, 4)),
+            KeyCode::Char('5') => Some(Command::JumpCue(self.focused_deck, 5)),
+            KeyCode::Char('6') => Some(Command::JumpCue(self.focused_deck, 6)),
+            KeyCode::Char('7') => Some(Command::JumpCue(self.focused_deck, 7)),
+            KeyCode::Char('8') => Some(Command::JumpCue(self.focused_deck, 8)),
             KeyCode::Char('!') => Some(Command::SetCue(self.focused_deck, 1)),
             KeyCode::Char('@') => Some(Command::SetCue(self.focused_deck, 2)),
             KeyCode::Char('#') => Some(Command::SetCue(self.focused_deck, 3)),
             KeyCode::Char('$') => Some(Command::SetCue(self.focused_deck, 4)),
+            KeyCode::Char('%') => Some(Command::SetCue(self.focused_deck, 5)),
+            KeyCode::Char('^') => Some(Command::SetCue(self.focused_deck, 6)),
+            KeyCode::Char('&') => Some(Command::SetCue(self.focused_deck, 7)),
+            KeyCode::Char('*') => Some(Command::SetCue(self.focused_deck, 8)),
 
             // Deck A controls (lowercase)
             KeyCode::Char('a') => Some(Command::Toggle(DeckId::A)),

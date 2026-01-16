@@ -1,7 +1,7 @@
 //! Deck implementation - track playback with pitch/tempo control
 
 use std::sync::Arc;
-use ole_analysis::{SpectrumAnalyzer, SpectrumData, BpmDetector, BeatGrid, BeatGridAnalyzer};
+use ole_analysis::{EnhancedWaveform, SpectrumAnalyzer, SpectrumData, BpmDetector, BeatGrid, BeatGridAnalyzer};
 
 /// Playback state for a deck
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -39,7 +39,12 @@ pub struct BeatGridInfo {
     pub bpm: f32,
     pub confidence: f32,
     pub has_grid: bool,
+    /// First beat offset in seconds (for rendering beat markers on waveform)
+    pub first_beat_offset_secs: f64,
 }
+
+/// Size of scope buffer for oscilloscope display
+pub const SCOPE_SAMPLES_SIZE: usize = 512;
 
 /// Complete deck state for UI rendering
 #[derive(Debug, Clone)]
@@ -56,10 +61,13 @@ pub struct DeckState {
     pub beat_phase: f32,    // current phase within beat (0.0 - 1.0)
     pub beat_grid_info: Option<BeatGridInfo>,
     pub waveform_overview: Arc<Vec<f32>>,  // pre-computed peaks for waveform display
+    pub enhanced_waveform: Arc<EnhancedWaveform>,  // enhanced waveform with frequency bands
     pub peak_level: f32,    // current peak level (0.0-1.0+, >1.0 = clipping)
     pub peak_hold: f32,     // peak hold level (decays slowly after hold time)
     pub is_clipping: bool,  // true if clipping detected
-    pub cue_points: [Option<f64>; 4],  // cue point positions in seconds
+    pub cue_points: [Option<f64>; 8],  // cue point positions in seconds (1-8)
+    /// Recent audio samples for oscilloscope display (stereo interleaved: [L, R, L, R, ...])
+    pub scope_samples: Box<[f32; SCOPE_SAMPLES_SIZE * 2]>,
 }
 
 impl Default for DeckState {
@@ -77,10 +85,12 @@ impl Default for DeckState {
             beat_phase: 0.0,
             beat_grid_info: None,
             waveform_overview: Arc::new(Vec::new()),
+            enhanced_waveform: Arc::new(EnhancedWaveform::default()),
             peak_level: 0.0,
             peak_hold: 0.0,
             is_clipping: false,
-            cue_points: [None; 4],
+            cue_points: [None; 8],
+            scope_samples: Box::new([0.0; SCOPE_SAMPLES_SIZE * 2]),
         }
     }
 }
@@ -117,8 +127,10 @@ pub struct Deck {
     current_spectrum: SpectrumData,
     /// Pre-computed waveform overview for display - Arc to avoid cloning
     waveform_overview: Arc<Vec<f32>>,
-    /// Cue points (up to 4), stored as sample positions
-    cue_points: [Option<f64>; 4],
+    /// Enhanced waveform with frequency band analysis
+    enhanced_waveform: Arc<EnhancedWaveform>,
+    /// Cue points (up to 8), stored as sample positions
+    cue_points: [Option<f64>; 8],
     /// Current peak level for metering
     peak_level: f32,
     /// Peak hold level (max peak that decays slowly)
@@ -129,9 +141,17 @@ pub struct Deck {
     is_clipping: bool,
     /// Pre-allocated buffer for spectrum analysis (avoid allocation in process())
     spectrum_buffer: Vec<f32>,
+    /// Ring buffer for oscilloscope display (last N stereo samples)
+    /// Fixed size to avoid allocation in audio thread
+    scope_buffer: Box<[f32; Self::SCOPE_BUFFER_SIZE]>,
+    /// Write position in scope buffer
+    scope_write_pos: usize,
 }
 
 impl Deck {
+    /// Size of scope buffer (512 stereo samples = 1024 floats)
+    const SCOPE_BUFFER_SIZE: usize = 1024;
+
     /// Create a new empty deck
     pub fn new(target_sample_rate: u32) -> Self {
         Self {
@@ -150,19 +170,30 @@ impl Deck {
             bpm_detector: BpmDetector::new(target_sample_rate),
             current_spectrum: SpectrumData::default(),
             waveform_overview: Arc::new(Vec::new()),
-            cue_points: [None; 4],
+            enhanced_waveform: Arc::new(EnhancedWaveform::default()),
+            cue_points: [None; 8],
             peak_level: 0.0,
             peak_hold: 0.0,
             peak_hold_samples: 0,
             is_clipping: false,
             // Pre-allocate buffer for spectrum analysis (4096 mono samples max)
             spectrum_buffer: Vec::with_capacity(4096),
+            // Scope buffer for oscilloscope visualization
+            scope_buffer: Box::new([0.0; Self::SCOPE_BUFFER_SIZE]),
+            scope_write_pos: 0,
         }
     }
 
     /// Load audio samples into the deck
     /// Uses Arc to avoid copying large sample data
-    pub fn load(&mut self, samples: Arc<Vec<f32>>, sample_rate: u32, name: Option<String>, waveform: Arc<Vec<f32>>) {
+    pub fn load(
+        &mut self,
+        samples: Arc<Vec<f32>>,
+        sample_rate: u32,
+        name: Option<String>,
+        waveform: Arc<Vec<f32>>,
+        enhanced_waveform: Arc<EnhancedWaveform>,
+    ) {
         self.samples = samples;
         self.sample_rate = sample_rate;
         self.position = 0.0;
@@ -173,6 +204,7 @@ impl Deck {
         self.sync_transition = SyncTransition::default();
         self.bpm_detector = BpmDetector::new(sample_rate);
         self.waveform_overview = waveform;
+        self.enhanced_waveform = enhanced_waveform;
 
         // Analyze beat grid from first 30 seconds of audio
         if !self.samples.is_empty() {
@@ -402,10 +434,16 @@ impl Deck {
 
     /// Get deck state for UI
     pub fn state(&self) -> DeckState {
-        let beat_grid_info = self.beat_grid.as_ref().map(|g| BeatGridInfo {
-            bpm: g.bpm,
-            confidence: g.confidence,
-            has_grid: true,
+        let beat_grid_info = self.beat_grid.as_ref().map(|g| {
+            // Convert first beat offset from samples to seconds
+            let sample_rate_stereo = self.sample_rate as f64 * 2.0;
+            let first_beat_offset_secs = g.first_beat_offset as f64 / sample_rate_stereo;
+            BeatGridInfo {
+                bpm: g.bpm,
+                confidence: g.confidence,
+                has_grid: true,
+                first_beat_offset_secs,
+            }
         });
 
         // Convert cue points from sample positions to seconds
@@ -413,6 +451,14 @@ impl Deck {
         let cue_points = self.cue_points.map(|opt| {
             opt.map(|pos| pos / sample_rate_stereo)
         });
+
+        // Copy scope buffer for oscilloscope display
+        // We read from the ring buffer in order, starting from write position
+        let mut scope_samples = Box::new([0.0f32; SCOPE_SAMPLES_SIZE * 2]);
+        for i in 0..Self::SCOPE_BUFFER_SIZE {
+            let src_idx = (self.scope_write_pos + i) % Self::SCOPE_BUFFER_SIZE;
+            scope_samples[i] = self.scope_buffer[src_idx];
+        }
 
         DeckState {
             playback: self.state,
@@ -427,10 +473,12 @@ impl Deck {
             beat_phase: self.beat_phase().unwrap_or(0.0),
             beat_grid_info,
             waveform_overview: self.waveform_overview.clone(),
+            enhanced_waveform: self.enhanced_waveform.clone(),
             peak_level: self.peak_level,
             peak_hold: self.peak_hold,
             is_clipping: self.is_clipping,
             cue_points,
+            scope_samples,
         }
     }
 
@@ -498,6 +546,13 @@ impl Deck {
         // Update spectrum
         if !self.spectrum_buffer.is_empty() {
             self.current_spectrum = self.spectrum_analyzer.process(&self.spectrum_buffer);
+        }
+
+        // Update scope buffer for oscilloscope display
+        // Copy the processed output samples to the ring buffer
+        for &sample in output.iter() {
+            self.scope_buffer[self.scope_write_pos] = sample;
+            self.scope_write_pos = (self.scope_write_pos + 1) % Self::SCOPE_BUFFER_SIZE;
         }
 
         // Track peak level with slow decay (current_peak already computed above)

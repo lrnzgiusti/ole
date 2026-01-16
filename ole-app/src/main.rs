@@ -27,7 +27,7 @@ use ole_input::{InputHandler, Command, DeckId, Direction, EffectType};
 use ole_library::{AnalysisCache, LibraryScanner, ScanConfig, ScanProgress, TrackLoader};
 use ole_tui::{
     App, FocusedPane, LibraryWidget, Theme,
-    DeckWidget, SpectrumWidget, CrossfaderWidget, StatusBarWidget, HelpWidget,
+    DeckWidget, SpectrumWidget, ScopeWidget, CrossfaderWidget, PhaseWidget, StatusBarWidget, HelpWidget,
 };
 
 /// Frame rate for UI updates
@@ -256,6 +256,12 @@ fn run_app(
         // Increment frame counter for animations
         app.state.frame_count = app.state.frame_count.wrapping_add(1);
 
+        // Update beat pulse animation (CRT glow effect on downbeat)
+        app.state.update_beat_pulse();
+
+        // Update CRT visual effects (phosphor afterglow, peak hold, etc.)
+        app.state.update_crt_effects();
+
         // Render
         terminal.draw(|frame| {
             render_ui(frame, &mut app);
@@ -446,6 +452,20 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
 
         // UI commands
         Command::ToggleHelp => app.state.toggle_help(),
+        Command::ToggleScope => app.state.toggle_scope(),
+        Command::CycleScopeMode => app.state.cycle_scope_mode(),
+        Command::ZoomIn(deck) => {
+            match deck {
+                DeckId::A => app.state.zoom_a = app.state.zoom_a.zoom_in(),
+                DeckId::B => app.state.zoom_b = app.state.zoom_b.zoom_in(),
+            }
+        }
+        Command::ZoomOut(deck) => {
+            match deck {
+                DeckId::A => app.state.zoom_a = app.state.zoom_a.zoom_out(),
+                DeckId::B => app.state.zoom_b = app.state.zoom_b.zoom_out(),
+            }
+        }
         Command::SetTheme(name) => app.state.set_theme(&name),
         Command::CycleFocus => app.state.cycle_focus(),
         Command::Focus(deck) => {
@@ -552,9 +572,10 @@ fn load_track(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, deck: D
             // Wrap in Arc to avoid copying large sample data through channel
             let samples = Arc::new(track.samples);
             let waveform = Arc::new(track.waveform_overview);
+            let enhanced_waveform = Arc::new(track.enhanced_waveform);
             match deck {
-                DeckId::A => engine.send(AudioCommand::LoadDeckA(samples, track.sample_rate, name, waveform)),
-                DeckId::B => engine.send(AudioCommand::LoadDeckB(samples, track.sample_rate, name, waveform)),
+                DeckId::A => engine.send(AudioCommand::LoadDeckA(samples, track.sample_rate, name, waveform, enhanced_waveform)),
+                DeckId::B => engine.send(AudioCommand::LoadDeckB(samples, track.sample_rate, name, waveform, enhanced_waveform)),
             }
 
             app.state.set_message(format!(
@@ -585,7 +606,7 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
             Constraint::Min(8),     // Main content (decks)
             Constraint::Length(8),  // Library
             Constraint::Length(6),  // Spectrum
-            Constraint::Length(3),  // Crossfader
+            Constraint::Length(3),  // Phase + Crossfader
             Constraint::Length(1),  // Status bar
         ])
         .split(area)
@@ -594,7 +615,7 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
             Constraint::Length(1),  // Title
             Constraint::Min(10),    // Main content
             Constraint::Length(6),  // Spectrum
-            Constraint::Length(3),  // Crossfader
+            Constraint::Length(3),  // Phase + Crossfader
             Constraint::Length(1),  // Status bar
         ])
         .split(area)
@@ -610,19 +631,25 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
     ])
     .split(chunks[1]);
 
-    // Deck A
+    // Deck A (with beat pulse and CRT peak hold effects)
     let deck_a = DeckWidget::new(&app.state.deck_a, theme, "DECK A")
         .focused(app.state.focused == FocusedPane::DeckA)
         .frame_count(app.state.frame_count)
+        .beat_pulse(app.state.beat_pulse_a)
+        .crt_peak_hold(app.state.crt_effects.vu_peak_a)
+        .zoom(app.state.zoom_a)
         .filter(app.state.filter_a_enabled, app.state.filter_a_type, app.state.filter_a_level)
         .delay(app.state.delay_a_enabled, app.state.delay_a_level)
         .reverb(app.state.reverb_a_enabled, app.state.reverb_a_level);
     frame.render_widget(deck_a, deck_chunks[0]);
 
-    // Deck B
+    // Deck B (with beat pulse and CRT peak hold effects)
     let deck_b = DeckWidget::new(&app.state.deck_b, theme, "DECK B")
         .focused(app.state.focused == FocusedPane::DeckB)
         .frame_count(app.state.frame_count)
+        .beat_pulse(app.state.beat_pulse_b)
+        .crt_peak_hold(app.state.crt_effects.vu_peak_b)
+        .zoom(app.state.zoom_b)
         .filter(app.state.filter_b_enabled, app.state.filter_b_type, app.state.filter_b_level)
         .delay(app.state.delay_b_enabled, app.state.delay_b_level)
         .reverb(app.state.reverb_b_enabled, app.state.reverb_b_level);
@@ -643,18 +670,50 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         frame.render_widget(library, chunks[idx]);
     }
 
-    // Spectrum analyzer
-    let spectrum = SpectrumWidget::new(
-        &app.state.deck_a.spectrum,
-        &app.state.deck_b.spectrum,
-        theme,
-    );
-    frame.render_widget(spectrum, chunks[spectrum_idx]);
+    // Combined beat pulse (max of both decks) for shared widgets
+    let combined_beat_pulse = app.state.beat_pulse_a.max(app.state.beat_pulse_b);
+
+    // Spectrum analyzer or Oscilloscope (toggle with 'v')
+    if app.state.show_scope {
+        let scope = ScopeWidget::new(
+            app.state.deck_a.scope_samples.as_slice(),
+            app.state.deck_b.scope_samples.as_slice(),
+            theme,
+        ).mode(app.state.scope_mode);
+        frame.render_widget(scope, chunks[spectrum_idx]);
+    } else {
+        let spectrum = SpectrumWidget::new(
+            &app.state.deck_a.spectrum,
+            &app.state.deck_b.spectrum,
+            theme,
+        )
+        .beat_pulse(combined_beat_pulse)
+        .afterglow(
+            &app.state.crt_effects.spectrum_history,
+            app.state.crt_effects.spectrum_history_idx,
+        );
+        frame.render_widget(spectrum, chunks[spectrum_idx]);
+    }
+
+    // Phase + Crossfader area (split horizontally)
+    let mixer_chunks = Layout::horizontal([
+        Constraint::Percentage(50),  // Phase meter
+        Constraint::Percentage(50),  // Crossfader
+    ])
+    .split(chunks[crossfader_idx]);
+
+    // Phase meter - shows beat alignment between decks
+    let has_grid_a = app.state.deck_a.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
+    let has_grid_b = app.state.deck_b.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
+    let phase = PhaseWidget::new(theme)
+        .phases(app.state.deck_a.beat_phase, app.state.deck_b.beat_phase)
+        .has_grids(has_grid_a, has_grid_b);
+    frame.render_widget(phase, mixer_chunks[0]);
 
     // Crossfader with BPM difference display
     let crossfader = CrossfaderWidget::new(app.state.crossfader, theme)
         .bpms(app.state.deck_a.bpm, app.state.deck_b.bpm);
-    frame.render_widget(crossfader, chunks[crossfader_idx]);
+    frame.render_widget(crossfader, mixer_chunks[1]);
 
     // Build effect chain strings
     let effects_a = build_effect_string(
@@ -683,6 +742,19 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         let help_area = centered_rect(65, 37, area);
         let help = HelpWidget::new(theme);
         frame.render_widget(help, help_area);
+    }
+
+    // CRT post-processing effects
+    let buf = frame.buffer_mut();
+
+    // Scanlines effect (subtle horizontal line darkening)
+    if app.state.crt_effects.scanlines_enabled {
+        apply_scanlines(buf, area, app.state.crt_effects.scanline_offset, theme);
+    }
+
+    // Screen flicker effect (triggered on track load)
+    if app.state.crt_effects.flicker_frames_remaining > 0 {
+        apply_flicker(buf, area, app.state.crt_effects.flicker_intensity);
     }
 }
 
@@ -726,4 +798,78 @@ fn build_effect_string(
         parts.push(format!("R{}", reverb_level));
     }
     parts.join(" ")
+}
+
+/// Apply CRT scanlines effect - dims every Nth row for raster appearance
+fn apply_scanlines(buf: &mut ratatui::buffer::Buffer, area: Rect, offset: u8, theme: &Theme) {
+    use ratatui::style::Color;
+
+    // Use theme's scanline settings
+    let scanline_spacing = theme.scanline_spacing;
+    let intensity = theme.scanline_intensity;
+
+    // Skip if scanlines disabled
+    if scanline_spacing == 0 || intensity <= 0.0 {
+        return;
+    }
+
+    let dim_factor = 1.0 - intensity.clamp(0.0, 0.8);  // Cap at 80% dimming
+
+    for y in area.y..area.y + area.height {
+        let row_with_offset = (y as u8).wrapping_add(offset / 4);  // Slow roll
+        if row_with_offset % scanline_spacing == 0 {
+            for x in area.x..area.x + area.width {
+                let cell = &mut buf[(x, y)];
+                // Dim the foreground color based on theme intensity
+                if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
+                    let new_r = (r as f32 * dim_factor) as u8;
+                    let new_g = (g as f32 * dim_factor) as u8;
+                    let new_b = (b as f32 * dim_factor) as u8;
+                    cell.set_style(cell.style().fg(Color::Rgb(new_r, new_g, new_b)));
+                } else {
+                    // Fallback: use theme dim
+                    cell.set_style(theme.dim());
+                }
+            }
+        }
+    }
+}
+
+/// Apply screen flicker effect - random distortion on track load
+fn apply_flicker(buf: &mut ratatui::buffer::Buffer, area: Rect, intensity: f32) {
+    use ratatui::style::Color;
+
+    if intensity < 0.1 {
+        return;
+    }
+
+    // Simple flicker: brighten all cells briefly
+    let brightness_boost = intensity * 0.3;
+
+    for y in area.y..area.y + area.height {
+        // Add some row-based variation using a simple pattern
+        let row_effect = ((y as u16 * 7 + (intensity * 100.0) as u16) % 5 == 0) && intensity > 0.5;
+
+        for x in area.x..area.x + area.width {
+            let cell = &mut buf[(x, y)];
+
+            if row_effect {
+                // Occasional row glitch - swap with neighbor character
+                let glitch_char = match (x + y) % 4 {
+                    0 => '░',
+                    1 => '▒',
+                    _ => cell.symbol().chars().next().unwrap_or(' '),
+                };
+                cell.set_char(glitch_char);
+            }
+
+            // Brighten colors
+            if let Some(Color::Rgb(r, g, b)) = cell.style().fg {
+                let new_r = ((r as f32 * (1.0 + brightness_boost)).min(255.0)) as u8;
+                let new_g = ((g as f32 * (1.0 + brightness_boost)).min(255.0)) as u8;
+                let new_b = ((b as f32 * (1.0 + brightness_boost)).min(255.0)) as u8;
+                cell.set_style(cell.style().fg(Color::Rgb(new_r, new_g, new_b)));
+            }
+        }
+    }
 }

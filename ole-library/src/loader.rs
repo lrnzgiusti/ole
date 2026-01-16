@@ -1,5 +1,6 @@
 //! Audio file loading and decoding
 
+use ole_analysis::{EnhancedWaveform, WaveformAnalyzer};
 use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
@@ -45,6 +46,8 @@ pub struct LoadedTrack {
     pub metadata: TrackMetadata,
     /// Pre-computed waveform overview for display (downsampled peaks)
     pub waveform_overview: Vec<f32>,
+    /// Enhanced waveform with frequency band analysis
+    pub enhanced_waveform: EnhancedWaveform,
 }
 
 /// Audio file loader using Symphonia
@@ -169,12 +172,17 @@ impl TrackLoader {
         // Generate waveform overview
         let waveform_overview = self.generate_waveform_overview(&samples, 1000);
 
+        // Generate enhanced waveform with frequency analysis
+        let mut waveform_analyzer = WaveformAnalyzer::new(final_sample_rate);
+        let enhanced_waveform = waveform_analyzer.analyze(&samples, 1000, metadata.duration_secs);
+
         Ok(LoadedTrack {
             samples,
             sample_rate: final_sample_rate,
             channels,
             metadata,
             waveform_overview,
+            enhanced_waveform,
         })
     }
 

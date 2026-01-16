@@ -6,9 +6,9 @@ mod app;
 mod theme;
 pub mod widgets;
 
-pub use app::{App, AppState, FocusedPane};
+pub use app::{App, AppState, CrtEffects, FocusedPane, WaveformZoom, SPECTRUM_BANDS};
 pub use theme::{Theme, CRT_AMBER, CRT_GREEN, CYBERPUNK};
 pub use widgets::status_bar::HelpWidget;
 pub use widgets::{
-    CrossfaderWidget, DeckWidget, LibraryState, LibraryWidget, SpectrumWidget, StatusBarWidget,
+    CrossfaderWidget, DeckWidget, EnhancedWaveformWidget, LibraryState, LibraryWidget, PhaseWidget, ScopeWidget, ScopeMode, SpectrumWidget, StatusBarWidget,
 };

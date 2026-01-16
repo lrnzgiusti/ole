@@ -128,8 +128,6 @@ impl Complex {
 pub struct Stft {
     /// FFT size
     size: usize,
-    /// Log2 of FFT size
-    log2_size: u32,
     /// Hop size (overlap)
     hop_size: usize,
     /// Pre-computed Hann window
@@ -187,7 +185,6 @@ impl Stft {
 
         Self {
             size,
-            log2_size,
             hop_size,
             window,
             twiddles,

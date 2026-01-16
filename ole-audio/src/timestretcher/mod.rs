@@ -16,7 +16,7 @@
 //! ```rust,ignore
 //! use ole_audio::timestretcher::{PhaseVocoder, FftSize};
 //!
-//! let mut vocoder = PhaseVocoder::new(48000.0, FftSize::Medium);
+//! let mut vocoder = PhaseVocoder::new(FftSize::Medium);
 //! vocoder.set_stretch_ratio(1.5); // 50% slower, same pitch
 //!
 //! // In audio callback
@@ -62,9 +62,9 @@ pub struct PitchShifter {
 
 impl PitchShifter {
     /// Create pitch shifter
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new() -> Self {
         Self {
-            vocoder: PhaseVocoder::new(sample_rate, FftSize::Medium),
+            vocoder: PhaseVocoder::new(FftSize::Medium),
             semitones: 0.0,
             resample_ratio: 1.0,
             resample_state_l: 0.0,
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_pitch_shifter_semitone_clamping() {
-        let mut ps = PitchShifter::new(48000.0);
+        let mut ps = PitchShifter::new();
 
         ps.set_semitones(24.0);
         assert_eq!(ps.semitones(), 12.0);

@@ -112,6 +112,10 @@ pub enum Command {
 
     // UI
     ToggleHelp,
+    ToggleScope,      // Toggle between spectrum and oscilloscope view
+    CycleScopeMode,   // Cycle oscilloscope mode (time domain, lissajous)
+    ZoomIn(DeckId),   // Zoom in on waveform
+    ZoomOut(DeckId),  // Zoom out on waveform
     SetTheme(String),
     CycleFocus,
     Focus(DeckId),

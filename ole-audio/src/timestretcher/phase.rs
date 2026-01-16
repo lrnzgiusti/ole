@@ -15,14 +15,10 @@ const TWO_PI: f32 = 2.0 * PI;
 pub struct PhaseVocoder {
     /// STFT processor
     stft: Stft,
-    /// FFT size
-    fft_size: usize,
     /// Hop size
     hop_size: usize,
     /// Number of frequency bins
     num_bins: usize,
-    /// Sample rate
-    sample_rate: f32,
     /// Current time stretch ratio (1.0 = normal, 2.0 = double length)
     stretch_ratio: f32,
     /// Phase accumulator (left channel)
@@ -82,7 +78,7 @@ impl Default for PhaseLockMode {
 
 impl PhaseVocoder {
     /// Create new phase vocoder
-    pub fn new(sample_rate: f32, fft_size: FftSize) -> Self {
+    pub fn new(fft_size: FftSize) -> Self {
         let stft = Stft::new(fft_size);
         let num_bins = stft.num_bins();
         let hop_size = stft.hop_size();
@@ -96,10 +92,8 @@ impl PhaseVocoder {
 
         Self {
             stft,
-            fft_size: fft_size_val,
             hop_size,
             num_bins,
-            sample_rate,
             stretch_ratio: 1.0,
             phase_accum_l: vec![0.0; num_bins],
             phase_accum_r: vec![0.0; num_bins],
@@ -436,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_phase_vocoder_passthrough() {
-        let mut pv = PhaseVocoder::new(48000.0, FftSize::Small);
+        let mut pv = PhaseVocoder::new(FftSize::Small);
         pv.set_stretch_ratio(1.0);
 
         let mut output_count = 0;
@@ -457,7 +451,7 @@ mod tests {
 
     #[test]
     fn test_stretch_ratio_clamping() {
-        let mut pv = PhaseVocoder::new(48000.0, FftSize::Medium);
+        let mut pv = PhaseVocoder::new(FftSize::Medium);
 
         pv.set_stretch_ratio(0.1);
         assert_eq!(pv.stretch_ratio(), 0.25);

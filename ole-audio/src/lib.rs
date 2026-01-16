@@ -14,7 +14,7 @@ mod engine;
 mod vinyl;
 pub mod timestretcher;
 
-pub use deck::{Deck, DeckState, PlaybackState, BeatGridInfo, SyncTransition};
+pub use deck::{Deck, DeckState, PlaybackState, BeatGridInfo, SyncTransition, SCOPE_SAMPLES_SIZE};
 pub use mixer::{Mixer, CrossfaderCurve};
 pub use effects::{Effect, Filter, FilterType, FilterMode, LadderFilter, StateVariableFilter, SvfOutputType, Delay, DelayInterpolation, DelayModulation, Reverb};
 pub use engine::{AudioEngine, AudioCommand, AudioEvent, EngineState};

@@ -36,9 +36,6 @@ pub struct VinylEmulator {
     /// Vinyl surface noise
     pub noise: VinylNoise,
 
-    /// Sample rate
-    sample_rate: f32,
-
     /// Current preset
     current_preset: VinylPreset,
 }
@@ -52,7 +49,6 @@ impl VinylEmulator {
             wow_flutter: WowFlutter::new(sample_rate),
             warmth: AnalogWarmth::new(sample_rate),
             noise: VinylNoise::new(sample_rate),
-            sample_rate,
             current_preset: VinylPreset::default(),
         }
     }

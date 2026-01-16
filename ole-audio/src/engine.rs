@@ -4,18 +4,19 @@ use crate::deck::{Deck, DeckState};
 use crate::mixer::Mixer;
 use crate::effects::{Filter, FilterType, Delay, DelayModulation, Reverb, Effect, FilterMode, LadderFilter, StateVariableFilter, SvfOutputType};
 use crate::vinyl::{VinylEmulator, VinylPreset};
-use crate::timestretcher::{PhaseVocoder, FftSize, PhaseLockMode};
+use crate::timestretcher::{PhaseVocoder, FftSize};
 use crossbeam_channel::{Receiver, Sender, bounded};
+use ole_analysis::EnhancedWaveform;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Commands sent to the audio engine
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
-    // Deck commands (samples, sample_rate, name, waveform_overview)
+    // Deck commands (samples, sample_rate, name, waveform_overview, enhanced_waveform)
     // Using Arc to avoid copying large sample data through channels
-    LoadDeckA(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>),
-    LoadDeckB(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>),
+    LoadDeckA(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>),
+    LoadDeckB(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>),
     PlayA,
     PlayB,
     PauseA,
@@ -233,8 +234,8 @@ impl EngineState {
             vinyl_a: VinylEmulator::new(sample_rate as f32),
             vinyl_b: VinylEmulator::new(sample_rate as f32),
             // Phase vocoder (disabled by default, medium FFT size for balance)
-            phase_vocoder_a: PhaseVocoder::new(sample_rate as f32, FftSize::Medium),
-            phase_vocoder_b: PhaseVocoder::new(sample_rate as f32, FftSize::Medium),
+            phase_vocoder_a: PhaseVocoder::new(FftSize::Medium),
+            phase_vocoder_b: PhaseVocoder::new(FftSize::Medium),
             sample_rate,
             filter_a_level: 0,
             filter_b_level: 0,
@@ -278,7 +279,7 @@ impl EngineState {
     pub fn handle_command(&mut self, cmd: AudioCommand) {
         match cmd {
             // Deck A commands
-            AudioCommand::LoadDeckA(samples, sr, name, waveform) => self.deck_a.load(samples, sr, name, waveform),
+            AudioCommand::LoadDeckA(samples, sr, name, waveform, enhanced) => self.deck_a.load(samples, sr, name, waveform, enhanced),
             AudioCommand::PlayA => self.deck_a.play(),
             AudioCommand::PauseA => self.deck_a.pause(),
             AudioCommand::StopA => self.deck_a.stop(),
@@ -294,7 +295,7 @@ impl EngineState {
             AudioCommand::AdjustGainA(delta) => self.deck_a.adjust_gain(delta),
 
             // Deck B commands
-            AudioCommand::LoadDeckB(samples, sr, name, waveform) => self.deck_b.load(samples, sr, name, waveform),
+            AudioCommand::LoadDeckB(samples, sr, name, waveform, enhanced) => self.deck_b.load(samples, sr, name, waveform, enhanced),
             AudioCommand::PlayB => self.deck_b.play(),
             AudioCommand::PauseB => self.deck_b.pause(),
             AudioCommand::StopB => self.deck_b.stop(),

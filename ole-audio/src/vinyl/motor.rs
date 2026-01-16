@@ -19,7 +19,6 @@ pub struct TurntableMotor {
     // Physics parameters
     startup_time: f32,  // Seconds to reach full speed (0.5-2.0)
     brake_time: f32,    // Seconds to stop (0.3-1.0)
-    inertia: f32,       // Inertia factor (higher = more momentum)
 
     // State
     is_running: bool,
@@ -39,7 +38,6 @@ impl TurntableMotor {
             current_speed: 1.0,  // Start at full speed (already playing)
             startup_time: 0.8,
             brake_time: 0.5,
-            inertia: 0.995,  // High inertia for smooth response
             is_running: true,
             drift_phase: 0.0,
             drift_rate: 0.08,    // Very slow drift

@@ -1,5 +1,6 @@
 //! Deck widget - displays track info, waveform, and controls
 
+use ole_analysis::FrequencyBand;
 use ole_audio::DeckState;
 use ole_audio::PlaybackState;
 use ole_audio::FilterType;
@@ -10,6 +11,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget},
 };
+use crate::app::WaveformZoom;
 use crate::theme::Theme;
 
 /// Characters for vertical bar rendering (8 levels + empty)
@@ -29,6 +31,11 @@ pub struct DeckWidget<'a> {
     reverb_enabled: bool,
     reverb_level: u8,
     frame_count: u64,  // For animation timing
+    beat_pulse: f32,   // Beat pulse intensity (0.0-1.0) for border glow effect
+    /// UI-side peak hold for CRT VU meter effect (None = use audio-side peak_hold)
+    crt_peak_hold: Option<f32>,
+    /// Waveform zoom level
+    zoom: WaveformZoom,
 }
 
 impl<'a> DeckWidget<'a> {
@@ -46,7 +53,26 @@ impl<'a> DeckWidget<'a> {
             reverb_enabled: false,
             reverb_level: 0,
             frame_count: 0,
+            beat_pulse: 0.0,
+            crt_peak_hold: None,
+            zoom: WaveformZoom::default(),
         }
+    }
+
+    pub fn zoom(mut self, zoom: WaveformZoom) -> Self {
+        self.zoom = zoom;
+        self
+    }
+
+    /// Set UI-side peak hold for CRT VU meter effect
+    pub fn crt_peak_hold(mut self, peak: f32) -> Self {
+        self.crt_peak_hold = Some(peak);
+        self
+    }
+
+    pub fn beat_pulse(mut self, pulse: f32) -> Self {
+        self.beat_pulse = pulse;
+        self
     }
 
     pub fn frame_count(mut self, count: u64) -> Self {
@@ -100,6 +126,28 @@ impl<'a> DeckWidget<'a> {
         )
     }
 
+    /// Get the color for a frequency band
+    fn band_style(&self, band: FrequencyBand, is_played: bool) -> Style {
+        if is_played {
+            match band {
+                FrequencyBand::Bass => Style::default().fg(self.theme.deck_a), // Warm color for bass
+                FrequencyBand::Mid => Style::default().fg(self.theme.accent),   // Accent for mids
+                FrequencyBand::High => Style::default().fg(self.theme.deck_b),  // Cool color for highs
+            }
+        } else {
+            self.theme.dim()
+        }
+    }
+
+    /// Calculate viewport based on zoom level
+    fn viewport(&self, progress: f64) -> (f64, f64) {
+        let viewport_size = self.zoom.viewport_fraction();
+        let half = viewport_size / 2.0;
+        let start = (progress - half).clamp(0.0, 1.0 - viewport_size);
+        let end = (start + viewport_size).min(1.0);
+        (start, end)
+    }
+
     fn render_waveform(&self, width: usize) -> Line<'a> {
         use ratatui::style::Modifier;
 
@@ -109,9 +157,23 @@ impl<'a> DeckWidget<'a> {
         }
 
         let progress = (self.state.position / self.state.duration).clamp(0.0, 1.0);
-        let playhead_pos = (progress * width as f64) as usize;
-        let waveform = &self.state.waveform_overview;
         let duration = self.state.duration;
+
+        // Calculate viewport based on zoom level
+        let (viewport_start, viewport_end) = self.viewport(progress);
+        let viewport_range = viewport_end - viewport_start;
+
+        // Calculate playhead position within viewport
+        let playhead_in_viewport = if viewport_range > 0.0 {
+            ((progress - viewport_start) / viewport_range).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let playhead_pos = (playhead_in_viewport * width as f64) as usize;
+
+        let waveform = &self.state.waveform_overview;
+        let enhanced = &self.state.enhanced_waveform;
+        let use_enhanced = !enhanced.is_empty();
 
         // Calculate cue marker positions (index in waveform display)
         let cue_markers: Vec<(usize, usize)> = self.state.cue_points
@@ -120,67 +182,197 @@ impl<'a> DeckWidget<'a> {
             .filter_map(|(idx, opt)| {
                 opt.map(|pos_secs| {
                     let cue_progress = (pos_secs / duration).clamp(0.0, 1.0);
-                    let cue_pos = (cue_progress * width as f64) as usize;
-                    (idx, cue_pos.min(width.saturating_sub(1)))
+                    // Map cue to viewport
+                    if cue_progress >= viewport_start && cue_progress <= viewport_end {
+                        let cue_in_viewport = (cue_progress - viewport_start) / viewport_range;
+                        let cue_pos = (cue_in_viewport * width as f64) as usize;
+                        Some((idx, cue_pos.min(width.saturating_sub(1))))
+                    } else {
+                        None
+                    }
                 })
             })
+            .flatten()
             .collect();
+
+        // Calculate beat marker positions from beat grid (within viewport)
+        // Returns (position, is_downbeat) where downbeat = beat 1 of a 4-beat bar
+        let beat_markers: Vec<(usize, bool)> = self.state.beat_grid_info
+            .as_ref()
+            .filter(|g| g.has_grid && g.bpm > 0.0)
+            .map(|grid| {
+                let seconds_per_beat = 60.0 / grid.bpm as f64;
+                let first_beat = grid.first_beat_offset_secs;
+
+                let mut beats = Vec::new();
+
+                // Handle beats before first_beat (count backwards)
+                if first_beat > seconds_per_beat {
+                    let mut pre_beat = first_beat - seconds_per_beat;
+                    let mut beat_num: i32 = -1; // Beat before first_beat
+                    while pre_beat >= 0.0 {
+                        let beat_progress = (pre_beat / duration).clamp(0.0, 1.0);
+                        if beat_progress >= viewport_start && beat_progress <= viewport_end {
+                            let beat_in_viewport = (beat_progress - viewport_start) / viewport_range;
+                            let beat_pos = (beat_in_viewport * width as f64) as usize;
+                            if beat_pos < width {
+                                // Downbeat every 4 beats (0, 4, 8, ...)
+                                let is_downbeat = beat_num.rem_euclid(4) == 0;
+                                beats.push((beat_pos, is_downbeat));
+                            }
+                        }
+                        pre_beat -= seconds_per_beat;
+                        beat_num -= 1;
+                    }
+                }
+
+                // Calculate beats from first_beat onwards
+                let mut beat_time = first_beat;
+                let mut beat_num: i32 = 0;
+                while beat_time < duration {
+                    let beat_progress = (beat_time / duration).clamp(0.0, 1.0);
+                    if beat_progress >= viewport_start && beat_progress <= viewport_end {
+                        let beat_in_viewport = (beat_progress - viewport_start) / viewport_range;
+                        let beat_pos = (beat_in_viewport * width as f64) as usize;
+                        if beat_pos < width {
+                            // Downbeat every 4 beats (0, 4, 8, ...)
+                            let is_downbeat = beat_num % 4 == 0;
+                            beats.push((beat_pos, is_downbeat));
+                        }
+                    }
+                    beat_time += seconds_per_beat;
+                    beat_num += 1;
+                }
+                beats
+            })
+            .unwrap_or_default();
 
         let mut spans = Vec::with_capacity(width);
 
         for i in 0..width {
-            // Check if this position has a cue marker
+            // Calculate track position for this display position
+            let track_progress = viewport_start + (i as f64 / width as f64) * viewport_range;
+
+            // Check if this position has a cue marker (highest priority)
             let cue_at_pos = cue_markers.iter().find(|(_, pos)| *pos == i);
 
             if let Some((cue_num, _)) = cue_at_pos {
-                // Draw numbered cue marker (1-4) with bold highlight
-                let marker = ['1', '2', '3', '4'][*cue_num];
+                // Draw numbered cue marker (1-8) with bold highlight
+                let marker = ['1', '2', '3', '4', '5', '6', '7', '8'][*cue_num];
                 let style = self.theme.highlight().add_modifier(Modifier::BOLD);
                 spans.push(Span::styled(marker.to_string(), style));
-            } else {
-                // Normal waveform rendering
-                let waveform_idx = (i * waveform.len()) / width.max(1);
-                let peak = waveform.get(waveform_idx).copied().unwrap_or(0.0);
+            } else if i == playhead_pos {
+                // Playhead position - always visible
+                spans.push(Span::styled("│", self.theme.highlight()));
+            } else if let Some((_, is_downbeat)) = beat_markers.iter().find(|(pos, _)| *pos == i) {
+                // Beat marker - show volume bar with highlight color to indicate beat
+                let (peak, _band) = if use_enhanced {
+                    let idx = (track_progress * enhanced.len() as f64) as usize;
+                    let point = enhanced.points.get(idx);
+                    (
+                        point.map(|p| p.amplitude).unwrap_or(0.0),
+                        point.map(|p| p.band).unwrap_or(FrequencyBand::Mid)
+                    )
+                } else {
+                    let idx = (track_progress * waveform.len() as f64) as usize;
+                    (waveform.get(idx).copied().unwrap_or(0.0), FrequencyBand::Mid)
+                };
 
-                // Map peak (0.0-1.0) to bar character (0-8)
                 let char_idx = (peak.clamp(0.0, 1.0) * 8.0) as usize;
                 let bar_char = BAR_CHARS[char_idx.min(8)];
 
-                // Choose style based on position relative to playhead
-                let style = if i == playhead_pos {
-                    // Playhead - use highlight/inverse style
-                    self.theme.highlight()
-                } else if i < playhead_pos {
-                    // Played portion - brighter/accent color
-                    Style::from(self.theme.accent)
+                // Downbeats (beat 1 of bar) get bold highlight, regular beats get normal highlight
+                let style = if *is_downbeat {
+                    self.theme.highlight().add_modifier(Modifier::BOLD)
                 } else {
-                    // Unplayed portion - dimmer
-                    self.theme.dim()
+                    self.theme.highlight()
+                };
+                spans.push(Span::styled(bar_char.to_string(), style));
+            } else {
+                // Normal waveform rendering with frequency coloring
+                let (peak, band) = if use_enhanced {
+                    let idx = (track_progress * enhanced.len() as f64) as usize;
+                    let point = enhanced.points.get(idx);
+                    (
+                        point.map(|p| p.amplitude).unwrap_or(0.0),
+                        point.map(|p| p.band).unwrap_or(FrequencyBand::Mid)
+                    )
+                } else {
+                    let idx = (track_progress * waveform.len() as f64) as usize;
+                    (waveform.get(idx).copied().unwrap_or(0.0), FrequencyBand::Mid)
                 };
 
-                // For playhead position, use a visible marker
-                let ch = if i == playhead_pos { '│' } else { bar_char };
-                spans.push(Span::styled(ch.to_string(), style));
+                let char_idx = (peak.clamp(0.0, 1.0) * 8.0) as usize;
+                let bar_char = BAR_CHARS[char_idx.min(8)];
+
+                let is_played = i < playhead_pos;
+                let style = self.band_style(band, is_played);
+
+                spans.push(Span::styled(bar_char.to_string(), style));
             }
         }
 
         Line::from(spans)
     }
 
+    /// Render LED ladder-style VU meter with dB scale
+    /// value/peak_hold: 0.0-2.0 where 1.0 = 0dB, 2.0 = +6dB
     fn render_meter(value: f32, peak_hold: f32, width: usize, theme: &Theme) -> Vec<Span<'a>> {
-        let filled = ((value.clamp(0.0, 2.0) / 2.0) * width as f32) as usize;
-        let peak_pos = ((peak_hold.clamp(0.0, 2.0) / 2.0) * width as f32) as usize;
-        let style = theme.meter_style(value / 2.0);
-        let peak_style = theme.meter_style(peak_hold / 2.0);
+        // LED segments configuration
+        // Scale: -48dB to +6dB mapped to 0.0 to 2.0
+        // We use 12 segments for the main meter area
+
+        // Calculate position in segments (0 to width)
+        // Map: 0.0 -> 0%, 1.0 (0dB) -> ~85%, 2.0 (+6dB) -> 100%
+        let value_normalized = if value <= 0.0 {
+            0.0
+        } else {
+            // Convert to dB then to position
+            // 0dB = value 1.0, +6dB = value 2.0
+            // Use log scale for more realistic VU behavior
+            let db = 20.0 * value.log10();
+            // Map -48dB to +6dB -> 0.0 to 1.0
+            ((db + 48.0) / 54.0).clamp(0.0, 1.0)
+        };
+
+        let peak_normalized = if peak_hold <= 0.0 {
+            0.0
+        } else {
+            let db = 20.0 * peak_hold.log10();
+            ((db + 48.0) / 54.0).clamp(0.0, 1.0)
+        };
+
+        let filled = (value_normalized * width as f32) as usize;
+        let peak_pos = (peak_normalized * width as f32) as usize;
+
+        // Threshold positions for color zones (in normalized 0-1 space)
+        // -6dB threshold: (-6 + 48) / 54 = 0.778
+        // 0dB threshold: (0 + 48) / 54 = 0.889
+        let yellow_threshold = (width as f32 * 0.778) as usize;
+        let red_threshold = (width as f32 * 0.889) as usize;
 
         (0..width)
             .map(|i| {
-                if i < filled {
-                    Span::styled("█", style)
-                } else if i == peak_pos && peak_pos > 0 && peak_pos < width {
-                    // Peak hold marker
-                    Span::styled("│", peak_style)
+                // Determine color based on position in meter
+                let segment_style = if i >= red_threshold {
+                    // Red zone (+0dB to +6dB)
+                    Style::default().fg(theme.danger)
+                } else if i >= yellow_threshold {
+                    // Yellow zone (-6dB to 0dB)
+                    Style::default().fg(theme.warning)
                 } else {
+                    // Green zone (below -6dB)
+                    Style::default().fg(theme.accent)
+                };
+
+                if i < filled {
+                    // Lit LED segment
+                    Span::styled("█", segment_style)
+                } else if i == peak_pos && peak_pos > 0 && peak_pos < width {
+                    // Peak hold marker - use the color for that position
+                    Span::styled("│", segment_style)
+                } else {
+                    // Unlit LED segment (dim)
                     Span::styled("░", theme.dim())
                 }
             })
@@ -223,20 +415,28 @@ impl<'a> DeckWidget<'a> {
 
 impl Widget for DeckWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let border_style = if self.is_focused {
+        use ratatui::style::Modifier;
+
+        // Base border style with beat pulse effect
+        let border_style = if self.beat_pulse > 0.1 {
+            // Beat pulse active - use highlight with bold for "glow" effect
+            self.theme.highlight().add_modifier(Modifier::BOLD)
+        } else if self.is_focused {
             self.theme.border_active()
         } else {
             self.theme.border()
         };
 
-        // Add focus indicator to title
+        // Add focus indicator to title (also pulse on beat)
         let title_text = if self.is_focused {
             format!(" ► {} ◄ ", self.title)
         } else {
             format!("   {}   ", self.title)
         };
 
-        let title_style = if self.is_focused {
+        let title_style = if self.beat_pulse > 0.1 {
+            self.theme.highlight().add_modifier(Modifier::BOLD)
+        } else if self.is_focused {
             self.theme.highlight()
         } else {
             self.theme.title()
@@ -312,8 +512,10 @@ impl Widget for DeckWidget<'_> {
         Paragraph::new(line).render(chunks[2], buf);
 
         // Row 4: Gain meter with peak hold and clip indicator
+        // Use UI-side CRT peak hold for classic analog behavior (longer hold, slower decay)
+        let peak_hold = self.crt_peak_hold.unwrap_or(self.state.peak_hold);
         let meter_width = (inner.width as usize).saturating_sub(12);
-        let gain_spans = Self::render_meter(self.state.gain, self.state.peak_hold, meter_width, self.theme);
+        let gain_spans = Self::render_meter(self.state.gain, peak_hold, meter_width, self.theme);
         let gain_pct = (self.state.gain * 100.0) as u32;
         // Blinking CLIP indicator - blinks every 4 frames (~8Hz at 30fps)
         let clip_indicator = if self.state.is_clipping {
