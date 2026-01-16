@@ -56,6 +56,7 @@ pub struct DeckState {
     pub pitch: f32,         // semitones shift
     pub gain: f32,          // 0.0 - 2.0
     pub bpm: Option<f32>,   // detected BPM (adjusted for tempo)
+    pub key: Option<String>, // Camelot notation: "8A", "12B"
     pub track_name: Option<String>,
     pub spectrum: SpectrumData,
     pub beat_phase: f32,    // current phase within beat (0.0 - 1.0)
@@ -80,6 +81,7 @@ impl Default for DeckState {
             pitch: 0.0,
             gain: 1.0,
             bpm: None,
+            key: None,
             track_name: None,
             spectrum: SpectrumData::default(),
             beat_phase: 0.0,
@@ -113,6 +115,8 @@ pub struct Deck {
     gain: f32,
     /// Track name
     track_name: Option<String>,
+    /// Detected key in Camelot notation (e.g., "8A", "12B")
+    key: Option<String>,
     /// Detected BPM (from beat grid or legacy detector)
     bpm: Option<f32>,
     /// Beat grid for phase-aligned sync
@@ -163,6 +167,7 @@ impl Deck {
             pitch: 0.0,
             gain: 1.0,
             track_name: None,
+            key: None,
             bpm: None,
             beat_grid: None,
             sync_transition: SyncTransition::default(),
@@ -193,12 +198,14 @@ impl Deck {
         name: Option<String>,
         waveform: Arc<Vec<f32>>,
         enhanced_waveform: Arc<EnhancedWaveform>,
+        key: Option<String>,
     ) {
         self.samples = samples;
         self.sample_rate = sample_rate;
         self.position = 0.0;
         self.state = PlaybackState::Stopped;
         self.track_name = name;
+        self.key = key;
         self.bpm = None;
         self.beat_grid = None;
         self.sync_transition = SyncTransition::default();
@@ -468,6 +475,7 @@ impl Deck {
             pitch: self.pitch,
             gain: self.gain,
             bpm: self.current_bpm(),
+            key: self.key.clone(),
             track_name: self.track_name.clone(),
             spectrum: self.current_spectrum,
             beat_phase: self.beat_phase().unwrap_or(0.0),

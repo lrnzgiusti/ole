@@ -31,7 +31,7 @@ pub struct DeckWidget<'a> {
     reverb_enabled: bool,
     reverb_level: u8,
     frame_count: u64,  // For animation timing
-    beat_pulse: f32,   // Beat pulse intensity (0.0-1.0) for border glow effect
+    sync_quality: f32, // Sync quality (0.0-1.0) for steady border glow when phase-locked
     /// UI-side peak hold for CRT VU meter effect (None = use audio-side peak_hold)
     crt_peak_hold: Option<f32>,
     /// Waveform zoom level
@@ -53,7 +53,7 @@ impl<'a> DeckWidget<'a> {
             reverb_enabled: false,
             reverb_level: 0,
             frame_count: 0,
-            beat_pulse: 0.0,
+            sync_quality: 0.0,
             crt_peak_hold: None,
             zoom: WaveformZoom::default(),
         }
@@ -70,8 +70,8 @@ impl<'a> DeckWidget<'a> {
         self
     }
 
-    pub fn beat_pulse(mut self, pulse: f32) -> Self {
-        self.beat_pulse = pulse;
+    pub fn sync_quality(mut self, quality: f32) -> Self {
+        self.sync_quality = quality;
         self
     }
 
@@ -315,41 +315,22 @@ impl<'a> DeckWidget<'a> {
         Line::from(spans)
     }
 
-    /// Render LED ladder-style VU meter with dB scale
-    /// value/peak_hold: 0.0-2.0 where 1.0 = 0dB, 2.0 = +6dB
+    /// Render LED ladder-style meter with linear scale
+    /// value/peak_hold: 0.0-2.0 where 1.0 = unity gain (100%), 2.0 = 200%
     fn render_meter(value: f32, peak_hold: f32, width: usize, theme: &Theme) -> Vec<Span<'a>> {
-        // LED segments configuration
-        // Scale: -48dB to +6dB mapped to 0.0 to 2.0
-        // We use 12 segments for the main meter area
-
-        // Calculate position in segments (0 to width)
-        // Map: 0.0 -> 0%, 1.0 (0dB) -> ~85%, 2.0 (+6dB) -> 100%
-        let value_normalized = if value <= 0.0 {
-            0.0
-        } else {
-            // Convert to dB then to position
-            // 0dB = value 1.0, +6dB = value 2.0
-            // Use log scale for more realistic VU behavior
-            let db = 20.0 * value.log10();
-            // Map -48dB to +6dB -> 0.0 to 1.0
-            ((db + 48.0) / 54.0).clamp(0.0, 1.0)
-        };
-
-        let peak_normalized = if peak_hold <= 0.0 {
-            0.0
-        } else {
-            let db = 20.0 * peak_hold.log10();
-            ((db + 48.0) / 54.0).clamp(0.0, 1.0)
-        };
+        // Linear scaling: gain range 0.0-2.0 maps to bar 0%-100%
+        // This matches the percentage display (gain * 100%)
+        let value_normalized = (value / 2.0).clamp(0.0, 1.0);
+        let peak_normalized = (peak_hold / 2.0).clamp(0.0, 1.0);
 
         let filled = (value_normalized * width as f32) as usize;
         let peak_pos = (peak_normalized * width as f32) as usize;
 
-        // Threshold positions for color zones (in normalized 0-1 space)
-        // -6dB threshold: (-6 + 48) / 54 = 0.778
-        // 0dB threshold: (0 + 48) / 54 = 0.889
-        let yellow_threshold = (width as f32 * 0.778) as usize;
-        let red_threshold = (width as f32 * 0.889) as usize;
+        // Threshold positions for color zones (linear scale)
+        // Yellow zone: 75% of bar = gain 1.5 (150%)
+        // Red zone: 90% of bar = gain 1.8 (180%)
+        let yellow_threshold = (width as f32 * 0.75) as usize;
+        let red_threshold = (width as f32 * 0.90) as usize;
 
         (0..width)
             .map(|i| {
@@ -417,25 +398,31 @@ impl Widget for DeckWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         use ratatui::style::Modifier;
 
-        // Base border style with beat pulse effect
-        let border_style = if self.beat_pulse > 0.1 {
-            // Beat pulse active - use highlight with bold for "glow" effect
-            self.theme.highlight().add_modifier(Modifier::BOLD)
+        // Border style based on sync quality (steady glow when phase-locked)
+        // >95% = green glow (locked), 80-95% = yellow (close), <80% = normal
+        let border_style = if self.sync_quality > 0.95 {
+            // Sync locked - steady green/accent glow
+            Style::default().fg(self.theme.accent)
+        } else if self.sync_quality > 0.80 {
+            // Close to sync - steady yellow/warning glow
+            Style::default().fg(self.theme.warning)
         } else if self.is_focused {
             self.theme.border_active()
         } else {
             self.theme.border()
         };
 
-        // Add focus indicator to title (also pulse on beat)
+        // Add focus indicator to title (with sync quality glow)
         let title_text = if self.is_focused {
             format!(" ► {} ◄ ", self.title)
         } else {
             format!("   {}   ", self.title)
         };
 
-        let title_style = if self.beat_pulse > 0.1 {
-            self.theme.highlight().add_modifier(Modifier::BOLD)
+        let title_style = if self.sync_quality > 0.95 {
+            Style::default().fg(self.theme.accent).add_modifier(Modifier::BOLD)
+        } else if self.sync_quality > 0.80 {
+            Style::default().fg(self.theme.warning)
         } else if self.is_focused {
             self.theme.highlight()
         } else {
@@ -480,13 +467,17 @@ impl Widget for DeckWidget<'_> {
         let waveform = self.render_waveform(inner.width as usize);
         Paragraph::new(waveform).render(chunks[1], buf);
 
-        // Row 3: Time / Remaining / BPM / Tempo / Beat Phase
+        // Row 3: Time / Remaining / KEY / BPM / Tempo / Beat Phase
         let remaining = (self.state.duration - self.state.position).max(0.0);
         let time_str = format!(
             "{} -{} ",
             Self::format_time(self.state.position),
             Self::format_time(remaining)
         );
+        let key_str = self.state.key
+            .as_ref()
+            .map(|k| format!("KEY:{}", k))
+            .unwrap_or_else(|| "KEY:---".to_string());
         let bpm_str = self.state.bpm
             .map(|b| format!("BPM:{:.1}", b))
             .unwrap_or_else(|| "BPM:---".to_string());
@@ -501,6 +492,8 @@ impl Widget for DeckWidget<'_> {
 
         let mut line_spans = vec![
             Span::styled(time_str, self.theme.normal()),
+            Span::raw("│ "),
+            Span::styled(key_str, Style::from(self.theme.accent)),
             Span::raw(" │ "),
             Span::styled(bpm_str, Style::from(self.theme.accent)),
             Span::raw(" │ "),

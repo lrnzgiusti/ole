@@ -60,20 +60,15 @@ pub struct PhaseVocoder {
 }
 
 /// Phase locking modes for different quality/CPU trade-offs
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PhaseLockMode {
     /// No phase locking (fastest, most phasiness)
     None,
     /// Identity phase locking (good quality, low CPU)
     Identity,
     /// Peak-locked phase locking (best quality, higher CPU)
+    #[default]
     PeakLocked,
-}
-
-impl Default for PhaseLockMode {
-    fn default() -> Self {
-        PhaseLockMode::PeakLocked
-    }
 }
 
 impl PhaseVocoder {

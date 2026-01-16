@@ -60,6 +60,12 @@ pub struct PitchShifter {
     resample_state_r: f32,
 }
 
+impl Default for PitchShifter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PitchShifter {
     /// Create pitch shifter
     pub fn new() -> Self {

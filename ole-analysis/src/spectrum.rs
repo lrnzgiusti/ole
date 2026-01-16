@@ -73,13 +73,13 @@ impl SpectrumAnalyzer {
     pub fn analyze(&mut self, samples: &[f32]) -> [f32; SPECTRUM_BANDS] {
         // Prepare FFT input buffer with windowing (reuse pre-allocated buffer)
         let sample_count = samples.len().min(self.fft_size);
-        for i in 0..sample_count {
-            let windowed = samples[i] * self.window.get(i).copied().unwrap_or(0.0);
+        for (i, &sample) in samples.iter().enumerate().take(sample_count) {
+            let windowed = sample * self.window.get(i).copied().unwrap_or(0.0);
             self.fft_buffer[i] = Complex::new(windowed, 0.0);
         }
         // Zero pad the rest
-        for i in sample_count..self.fft_size {
-            self.fft_buffer[i] = Complex::new(0.0, 0.0);
+        for buf in self.fft_buffer.iter_mut().skip(sample_count) {
+            *buf = Complex::new(0.0, 0.0);
         }
 
         // Perform FFT

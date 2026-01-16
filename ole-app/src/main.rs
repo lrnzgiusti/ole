@@ -28,6 +28,7 @@ use ole_library::{AnalysisCache, LibraryScanner, ScanConfig, ScanProgress, Track
 use ole_tui::{
     App, FocusedPane, LibraryWidget, Theme,
     DeckWidget, SpectrumWidget, ScopeWidget, CrossfaderWidget, PhaseWidget, StatusBarWidget, HelpWidget,
+    CamelotWheelWidget,
 };
 
 /// Frame rate for UI updates
@@ -256,8 +257,11 @@ fn run_app(
         // Increment frame counter for animations
         app.state.frame_count = app.state.frame_count.wrapping_add(1);
 
-        // Update beat pulse animation (CRT glow effect on downbeat)
+        // Update beat pulse animation (for beat phase dots)
         app.state.update_beat_pulse();
+
+        // Update sync quality for steady border glow when decks are phase-locked
+        app.state.update_sync_quality();
 
         // Update CRT visual effects (phosphor afterglow, peak hold, etc.)
         app.state.update_crt_effects();
@@ -299,7 +303,7 @@ fn run_app(
                             if let Some(track) = app.state.library.selected_track() {
                                 let path = track.path.clone();
                                 let key = track.key.clone();
-                                load_track(&mut app, &engine, &track_loader, *deck, &path);
+                                load_track_with_key(&mut app, &engine, &track_loader, *deck, &path, key.clone());
                                 // Update current playing key for harmonic highlighting
                                 app.state.library.current_playing_key = key;
                             }
@@ -447,7 +451,7 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
 
         // Load tracks
         Command::LoadTrack(deck, path) => {
-            load_track(app, engine, loader, deck, &path);
+            load_track_with_key(app, engine, loader, deck, &path, None);
         }
 
         // UI commands
@@ -558,7 +562,7 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
     }
 }
 
-fn load_track(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, deck: DeckId, path: &std::path::Path) {
+fn load_track_with_key(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, deck: DeckId, path: &std::path::Path, key: Option<String>) {
     app.state.set_message(format!("Loading {}...", path.display()));
 
     match loader.load(path) {
@@ -574,8 +578,8 @@ fn load_track(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, deck: D
             let waveform = Arc::new(track.waveform_overview);
             let enhanced_waveform = Arc::new(track.enhanced_waveform);
             match deck {
-                DeckId::A => engine.send(AudioCommand::LoadDeckA(samples, track.sample_rate, name, waveform, enhanced_waveform)),
-                DeckId::B => engine.send(AudioCommand::LoadDeckB(samples, track.sample_rate, name, waveform, enhanced_waveform)),
+                DeckId::A => engine.send(AudioCommand::LoadDeckA(samples, track.sample_rate, name, waveform, enhanced_waveform, key)),
+                DeckId::B => engine.send(AudioCommand::LoadDeckB(samples, track.sample_rate, name, waveform, enhanced_waveform, key)),
             }
 
             app.state.set_message(format!(
@@ -631,11 +635,11 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
     ])
     .split(chunks[1]);
 
-    // Deck A (with beat pulse and CRT peak hold effects)
+    // Deck A (with sync quality glow and CRT peak hold effects)
     let deck_a = DeckWidget::new(&app.state.deck_a, theme, "DECK A")
         .focused(app.state.focused == FocusedPane::DeckA)
         .frame_count(app.state.frame_count)
-        .beat_pulse(app.state.beat_pulse_a)
+        .sync_quality(app.state.sync_quality)
         .crt_peak_hold(app.state.crt_effects.vu_peak_a)
         .zoom(app.state.zoom_a)
         .filter(app.state.filter_a_enabled, app.state.filter_a_type, app.state.filter_a_level)
@@ -643,11 +647,11 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         .reverb(app.state.reverb_a_enabled, app.state.reverb_a_level);
     frame.render_widget(deck_a, deck_chunks[0]);
 
-    // Deck B (with beat pulse and CRT peak hold effects)
+    // Deck B (with sync quality glow and CRT peak hold effects)
     let deck_b = DeckWidget::new(&app.state.deck_b, theme, "DECK B")
         .focused(app.state.focused == FocusedPane::DeckB)
         .frame_count(app.state.frame_count)
-        .beat_pulse(app.state.beat_pulse_b)
+        .sync_quality(app.state.sync_quality)
         .crt_peak_hold(app.state.crt_effects.vu_peak_b)
         .zoom(app.state.zoom_b)
         .filter(app.state.filter_b_enabled, app.state.filter_b_type, app.state.filter_b_level)
@@ -670,9 +674,6 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         frame.render_widget(library, chunks[idx]);
     }
 
-    // Combined beat pulse (max of both decks) for shared widgets
-    let combined_beat_pulse = app.state.beat_pulse_a.max(app.state.beat_pulse_b);
-
     // Spectrum analyzer or Oscilloscope (toggle with 'v')
     if app.state.show_scope {
         let scope = ScopeWidget::new(
@@ -687,7 +688,7 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
             &app.state.deck_b.spectrum,
             theme,
         )
-        .beat_pulse(combined_beat_pulse)
+        .sync_quality(app.state.sync_quality)
         .afterglow(
             &app.state.crt_effects.spectrum_history,
             app.state.crt_effects.spectrum_history_idx,
@@ -695,10 +696,11 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         frame.render_widget(spectrum, chunks[spectrum_idx]);
     }
 
-    // Phase + Crossfader area (split horizontally)
+    // Phase + Camelot + Crossfader area (split horizontally)
     let mixer_chunks = Layout::horizontal([
-        Constraint::Percentage(50),  // Phase meter
-        Constraint::Percentage(50),  // Crossfader
+        Constraint::Percentage(30),  // Phase meter
+        Constraint::Percentage(40),  // Camelot wheel
+        Constraint::Percentage(30),  // Crossfader
     ])
     .split(chunks[crossfader_idx]);
 
@@ -710,10 +712,16 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         .has_grids(has_grid_a, has_grid_b);
     frame.render_widget(phase, mixer_chunks[0]);
 
+    // Camelot wheel - harmonic mixing visualization
+    let camelot = CamelotWheelWidget::new(theme)
+        .key_a(app.state.deck_a.key.as_deref())
+        .key_b(app.state.deck_b.key.as_deref());
+    frame.render_widget(camelot, mixer_chunks[1]);
+
     // Crossfader with BPM difference display
     let crossfader = CrossfaderWidget::new(app.state.crossfader, theme)
         .bpms(app.state.deck_a.bpm, app.state.deck_b.bpm);
-    frame.render_widget(crossfader, mixer_chunks[1]);
+    frame.render_widget(crossfader, mixer_chunks[2]);
 
     // Build effect chain strings
     let effects_a = build_effect_string(
@@ -817,7 +825,7 @@ fn apply_scanlines(buf: &mut ratatui::buffer::Buffer, area: Rect, offset: u8, th
 
     for y in area.y..area.y + area.height {
         let row_with_offset = (y as u8).wrapping_add(offset / 4);  // Slow roll
-        if row_with_offset % scanline_spacing == 0 {
+        if row_with_offset.is_multiple_of(scanline_spacing) {
             for x in area.x..area.x + area.width {
                 let cell = &mut buf[(x, y)];
                 // Dim the foreground color based on theme intensity
@@ -848,7 +856,7 @@ fn apply_flicker(buf: &mut ratatui::buffer::Buffer, area: Rect, intensity: f32) 
 
     for y in area.y..area.y + area.height {
         // Add some row-based variation using a simple pattern
-        let row_effect = ((y as u16 * 7 + (intensity * 100.0) as u16) % 5 == 0) && intensity > 0.5;
+        let row_effect = (y * 7 + (intensity * 100.0) as u16).is_multiple_of(5) && intensity > 0.5;
 
         for x in area.x..area.x + area.width {
             let cell = &mut buf[(x, y)];

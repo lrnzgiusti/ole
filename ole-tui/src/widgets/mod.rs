@@ -1,5 +1,6 @@
 //! UI Widgets for OLE
 
+mod camelot;
 mod crossfader;
 mod deck;
 mod library;
@@ -9,6 +10,7 @@ mod spectrum;
 mod waveform;
 pub mod status_bar;
 
+pub use camelot::{CamelotWheelWidget, HarmonicCompatibility};
 pub use crossfader::CrossfaderWidget;
 pub use deck::DeckWidget;
 pub use library::{LibraryState, LibraryWidget};

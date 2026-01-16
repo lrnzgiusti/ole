@@ -133,7 +133,7 @@ impl VinylNoise {
         // Paul Kellet's economy pink noise filter
         self.noise_filter_b0 = 0.99886 * self.noise_filter_b0 + white * 0.0555179;
         self.noise_filter_b1 = 0.99332 * self.noise_filter_b1 + white * 0.0750759;
-        self.noise_filter_b2 = 0.96900 * self.noise_filter_b2 + white * 0.1538520;
+        self.noise_filter_b2 = 0.96900 * self.noise_filter_b2 + white * 0.153_852;
 
         let pink = self.noise_filter_b0 + self.noise_filter_b1 + self.noise_filter_b2 + white * 0.5362;
 
@@ -190,7 +190,7 @@ impl VinylNoise {
             let noise = self.get_sample();
 
             // Add same noise to both channels with slight variation
-            if frame.len() >= 1 {
+            if !frame.is_empty() {
                 frame[0] += noise;
             }
             if frame.len() >= 2 {

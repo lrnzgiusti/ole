@@ -264,6 +264,9 @@ pub struct AppState {
 
     // CRT visual effects
     pub crt_effects: CrtEffects,
+
+    // Sync quality (0.0-1.0, used for glow effect when decks are phase-locked)
+    pub sync_quality: f32,
 }
 
 impl Default for AppState {
@@ -319,6 +322,8 @@ impl Default for AppState {
             zoom_b: WaveformZoom::default(),
             // CRT effects
             crt_effects: CrtEffects::default(),
+            // Sync quality
+            sync_quality: 0.0,
         }
     }
 }
@@ -528,6 +533,32 @@ impl AppState {
         if self.beat_pulse_b < 0.01 {
             self.beat_pulse_b = 0.0;
         }
+    }
+
+    /// Calculate sync quality between decks (0.0-1.0)
+    /// Returns how well phase-locked the two decks are:
+    /// - 1.0 = perfectly in sync (phases match)
+    /// - 0.0 = completely out of sync (180° out of phase)
+    pub fn calculate_sync_quality(&self) -> f32 {
+        // Need both decks with beat grids to calculate sync
+        let has_grid_a = self.deck_a.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
+        let has_grid_b = self.deck_b.beat_grid_info.as_ref().is_some_and(|g| g.has_grid);
+
+        if !has_grid_a || !has_grid_b {
+            return 0.0;
+        }
+
+        // Calculate phase difference (0.0-1.0)
+        let phase_diff = (self.deck_a.beat_phase - self.deck_b.beat_phase).abs();
+        // Normalize: 0.5 diff = furthest apart, 0.0 or 1.0 = in sync
+        let normalized_diff = if phase_diff > 0.5 { 1.0 - phase_diff } else { phase_diff };
+        // Convert to quality: 0.0 diff = 1.0 quality, 0.5 diff = 0.0 quality
+        1.0 - (normalized_diff * 2.0)
+    }
+
+    /// Update sync quality (call each frame after audio state update)
+    pub fn update_sync_quality(&mut self) {
+        self.sync_quality = self.calculate_sync_quality();
     }
 }
 

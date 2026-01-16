@@ -10,5 +10,6 @@ pub use app::{App, AppState, CrtEffects, FocusedPane, WaveformZoom, SPECTRUM_BAN
 pub use theme::{Theme, CRT_AMBER, CRT_GREEN, CYBERPUNK};
 pub use widgets::status_bar::HelpWidget;
 pub use widgets::{
-    CrossfaderWidget, DeckWidget, EnhancedWaveformWidget, LibraryState, LibraryWidget, PhaseWidget, ScopeWidget, ScopeMode, SpectrumWidget, StatusBarWidget,
+    CamelotWheelWidget, CrossfaderWidget, DeckWidget, EnhancedWaveformWidget, HarmonicCompatibility,
+    LibraryState, LibraryWidget, PhaseWidget, ScopeWidget, ScopeMode, SpectrumWidget, StatusBarWidget,
 };

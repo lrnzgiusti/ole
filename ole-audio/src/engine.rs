@@ -13,10 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Commands sent to the audio engine
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
-    // Deck commands (samples, sample_rate, name, waveform_overview, enhanced_waveform)
+    // Deck commands (samples, sample_rate, name, waveform_overview, enhanced_waveform, key)
     // Using Arc to avoid copying large sample data through channels
-    LoadDeckA(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>),
-    LoadDeckB(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>),
+    LoadDeckA(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>, Option<String>),
+    LoadDeckB(Arc<Vec<f32>>, u32, Option<String>, Arc<Vec<f32>>, Arc<EnhancedWaveform>, Option<String>),
     PlayA,
     PlayB,
     PauseA,
@@ -279,7 +279,7 @@ impl EngineState {
     pub fn handle_command(&mut self, cmd: AudioCommand) {
         match cmd {
             // Deck A commands
-            AudioCommand::LoadDeckA(samples, sr, name, waveform, enhanced) => self.deck_a.load(samples, sr, name, waveform, enhanced),
+            AudioCommand::LoadDeckA(samples, sr, name, waveform, enhanced, key) => self.deck_a.load(samples, sr, name, waveform, enhanced, key),
             AudioCommand::PlayA => self.deck_a.play(),
             AudioCommand::PauseA => self.deck_a.pause(),
             AudioCommand::StopA => self.deck_a.stop(),
@@ -295,7 +295,7 @@ impl EngineState {
             AudioCommand::AdjustGainA(delta) => self.deck_a.adjust_gain(delta),
 
             // Deck B commands
-            AudioCommand::LoadDeckB(samples, sr, name, waveform, enhanced) => self.deck_b.load(samples, sr, name, waveform, enhanced),
+            AudioCommand::LoadDeckB(samples, sr, name, waveform, enhanced, key) => self.deck_b.load(samples, sr, name, waveform, enhanced, key),
             AudioCommand::PlayB => self.deck_b.play(),
             AudioCommand::PauseB => self.deck_b.pause(),
             AudioCommand::StopB => self.deck_b.stop(),

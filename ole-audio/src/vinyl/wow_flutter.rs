@@ -5,7 +5,7 @@
 //!
 //! Combined these create the characteristic "warmth" of vinyl playback.
 
-use std::f32::consts::PI;
+use std::f32::consts::{LN_2, PI};
 
 /// Wow and Flutter processor
 pub struct WowFlutter {
@@ -179,12 +179,11 @@ impl WowFlutter {
 fn fast_pow2(x: f32) -> f32 {
     // For very small x, use linear approximation
     if x.abs() < 0.001 {
-        return 1.0 + x * 0.693147; // ln(2) ≈ 0.693147
+        return 1.0 + x * LN_2;
     }
 
     // For slightly larger x, use quadratic approximation
-    let ln2 = 0.693147;
-    let x_ln2 = x * ln2;
+    let x_ln2 = x * LN_2;
     1.0 + x_ln2 + 0.5 * x_ln2 * x_ln2
 }
 

@@ -21,8 +21,8 @@ pub struct SpectrumWidget<'a> {
     spectrum_b: &'a SpectrumData,
     theme: &'a Theme,
     show_both: bool,
-    /// Combined beat pulse intensity (max of deck A and B) for border glow
-    beat_pulse: f32,
+    /// Sync quality (0.0-1.0) for steady border glow when both decks are phase-locked
+    sync_quality: f32,
     /// Phosphor afterglow history (optional, for CRT effect)
     afterglow_history: Option<&'a [[f32; AFTERGLOW_HISTORY]; SPECTRUM_BANDS]>,
     afterglow_history_idx: usize,
@@ -35,15 +35,15 @@ impl<'a> SpectrumWidget<'a> {
             spectrum_b,
             theme,
             show_both: true,
-            beat_pulse: 0.0,
+            sync_quality: 0.0,
             afterglow_history: None,
             afterglow_history_idx: 0,
         }
     }
 
-    /// Set beat pulse intensity for border glow effect
-    pub fn beat_pulse(mut self, pulse: f32) -> Self {
-        self.beat_pulse = pulse;
+    /// Set sync quality for border glow effect (glows when both decks are phase-locked)
+    pub fn sync_quality(mut self, quality: f32) -> Self {
+        self.sync_quality = quality;
         self
     }
 
@@ -61,7 +61,7 @@ impl<'a> SpectrumWidget<'a> {
             spectrum_b: spectrum,
             theme,
             show_both: false,
-            beat_pulse: 0.0,
+            sync_quality: 0.0,
             afterglow_history: None,
             afterglow_history_idx: 0,
         }
@@ -93,17 +93,22 @@ impl<'a> SpectrumWidget<'a> {
 
 impl Widget for SpectrumWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        use ratatui::style::Modifier;
+        use ratatui::style::{Modifier, Style};
 
-        // Beat pulse glow effect on border
-        let border_style = if self.beat_pulse > 0.1 {
-            self.theme.highlight().add_modifier(Modifier::BOLD)
+        // Border style based on sync quality (steady glow when both decks are phase-locked)
+        // >95% = green glow (locked), 80-95% = yellow (close), <80% = normal
+        let border_style = if self.sync_quality > 0.95 {
+            Style::default().fg(self.theme.accent)
+        } else if self.sync_quality > 0.80 {
+            Style::default().fg(self.theme.warning)
         } else {
             self.theme.border()
         };
 
-        let title_style = if self.beat_pulse > 0.1 {
-            self.theme.highlight().add_modifier(Modifier::BOLD)
+        let title_style = if self.sync_quality > 0.95 {
+            Style::default().fg(self.theme.accent).add_modifier(Modifier::BOLD)
+        } else if self.sync_quality > 0.80 {
+            Style::default().fg(self.theme.warning)
         } else {
             self.theme.title()
         };
@@ -153,9 +158,8 @@ impl Widget for SpectrumWidget<'_> {
                     let x = inner.x + (start_x + band * band_width) as u16;
                     let ghost_style = self.theme.spectrum_afterglow(band_idx, SPECTRUM_BANDS, decay);
 
-                    for row in 0..height {
+                    for (row, &ch) in ghost_bar.iter().enumerate().take(height) {
                         let y = inner.y + inner.height - 1 - row as u16;
-                        let ch = ghost_bar[row];
                         if ch != ' ' {
                             buf[(x, y)].set_char(ch).set_style(ghost_style);
                         }

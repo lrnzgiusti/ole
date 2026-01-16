@@ -14,7 +14,7 @@ use std::f32::consts::PI;
 const MAX_DELAY_SECS: f32 = 2.0;
 
 /// Delay interpolation mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum DelayInterpolation {
     /// No interpolation (integer samples only, lowest CPU)
     None,
@@ -26,7 +26,7 @@ pub enum DelayInterpolation {
 }
 
 /// Delay modulation mode for tape character
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum DelayModulation {
     /// No modulation (clean digital delay)
     #[default]

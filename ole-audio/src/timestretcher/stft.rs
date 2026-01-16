@@ -8,13 +8,15 @@
 //! - Circular buffer with bit-reversal permutation table
 
 use std::f32::consts::PI;
+use std::ops::{Add, Mul, Sub};
 
 /// FFT size options optimized for audio time-stretching
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FftSize {
     /// 1024 samples - lower latency, less frequency resolution
     Small = 1024,
     /// 2048 samples - balanced (recommended)
+    #[default]
     Medium = 2048,
     /// 4096 samples - higher quality, more latency
     Large = 4096,
@@ -39,12 +41,6 @@ impl FftSize {
             FftSize::Medium => 11,
             FftSize::Large => 12,
         }
-    }
-}
-
-impl Default for FftSize {
-    fn default() -> Self {
-        FftSize::Medium
     }
 }
 
@@ -84,30 +80,6 @@ impl Complex {
     }
 
     #[inline(always)]
-    pub fn mul(self, other: Self) -> Self {
-        Self {
-            re: self.re * other.re - self.im * other.im,
-            im: self.re * other.im + self.im * other.re,
-        }
-    }
-
-    #[inline(always)]
-    pub fn add(self, other: Self) -> Self {
-        Self {
-            re: self.re + other.re,
-            im: self.im + other.im,
-        }
-    }
-
-    #[inline(always)]
-    pub fn sub(self, other: Self) -> Self {
-        Self {
-            re: self.re - other.re,
-            im: self.im - other.im,
-        }
-    }
-
-    #[inline(always)]
     pub fn scale(self, s: f32) -> Self {
         Self {
             re: self.re * s,
@@ -120,6 +92,42 @@ impl Complex {
         Self {
             re: self.re,
             im: -self.im,
+        }
+    }
+}
+
+impl Add for Complex {
+    type Output = Self;
+
+    #[inline(always)]
+    fn add(self, other: Self) -> Self {
+        Self {
+            re: self.re + other.re,
+            im: self.im + other.im,
+        }
+    }
+}
+
+impl Sub for Complex {
+    type Output = Self;
+
+    #[inline(always)]
+    fn sub(self, other: Self) -> Self {
+        Self {
+            re: self.re - other.re,
+            im: self.im - other.im,
+        }
+    }
+}
+
+impl Mul for Complex {
+    type Output = Self;
+
+    #[inline(always)]
+    fn mul(self, other: Self) -> Self {
+        Self {
+            re: self.re * other.re - self.im * other.im,
+            im: self.re * other.im + self.im * other.re,
         }
     }
 }
@@ -255,7 +263,7 @@ impl Stft {
         self.input_pos = (self.input_pos + 1) % self.size;
 
         // Frame ready every hop_size samples
-        self.input_pos % self.hop_size == 0
+        self.input_pos.is_multiple_of(self.hop_size)
     }
 
     /// Perform forward FFT on current input frame
@@ -289,9 +297,8 @@ impl Stft {
         self.fft_in_place(false);
 
         // Copy positive frequencies to output
-        for i in 0..self.num_bins() {
-            output[i] = self.work[i];
-        }
+        let num_bins = self.num_bins();
+        output[..num_bins].copy_from_slice(&self.work[..num_bins]);
     }
 
     /// Perform inverse FFT and overlap-add to output buffer
@@ -313,11 +320,10 @@ impl Stft {
     /// Synthesize single channel
     fn synthesize_channel(&mut self, input: &[Complex], is_left: bool) {
         // Reconstruct full spectrum from positive frequencies (Hermitian symmetry)
-        for i in 0..self.num_bins() {
-            self.work[i] = input[i];
-        }
-        for i in 1..self.size / 2 {
-            self.work[self.size - i] = input[i].conj();
+        let num_bins = self.num_bins();
+        self.work[..num_bins].copy_from_slice(&input[..num_bins]);
+        for (i, &val) in input.iter().enumerate().take(self.size / 2).skip(1) {
+            self.work[self.size - i] = val.conj();
         }
 
         // In-place IFFT
