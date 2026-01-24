@@ -115,6 +115,10 @@ impl InputHandler {
             KeyCode::Char('g') => Some(Command::CycleCrtIntensity), // Cycle Off/Subtle/Medium/Heavy
             KeyCode::Char('G') => Some(Command::ToggleCrt),         // Master CRT toggle
 
+            // Mastering chain
+            KeyCode::Char('p') => Some(Command::CycleMasteringPreset), // Cycle presets
+            KeyCode::Char('P') => Some(Command::ToggleMastering),      // Toggle mastering on/off
+
             // Waveform zoom on focused deck
             KeyCode::Char('w') => Some(Command::ZoomIn(self.focused_deck)),
             KeyCode::Char('W') => Some(Command::ZoomOut(self.focused_deck)),
@@ -154,15 +158,21 @@ impl InputHandler {
             KeyCode::Char('a') => Some(Command::Toggle(DeckId::A)),
             KeyCode::Char('s') => Some(Command::Pause(DeckId::A)),
             KeyCode::Char('z') => Some(Command::Stop(DeckId::A)),
-            KeyCode::Char('x') => Some(Command::Nudge(DeckId::A, -1.0)),
-            KeyCode::Char('c') => Some(Command::Nudge(DeckId::A, 1.0)),
+            // Fine nudge: 20ms for precise beat alignment
+            KeyCode::Char('x') => Some(Command::Nudge(DeckId::A, -0.02)),
+            KeyCode::Char('c') => Some(Command::Nudge(DeckId::A, 0.02)),
 
             // Deck B controls (uppercase)
             KeyCode::Char('A') => Some(Command::Toggle(DeckId::B)),
             KeyCode::Char('S') => Some(Command::Pause(DeckId::B)),
             KeyCode::Char('Z') => Some(Command::Stop(DeckId::B)),
-            KeyCode::Char('X') => Some(Command::Nudge(DeckId::B, -1.0)),
-            KeyCode::Char('C') => Some(Command::Nudge(DeckId::B, 1.0)),
+            // Fine nudge: 20ms for precise beat alignment
+            KeyCode::Char('X') => Some(Command::Nudge(DeckId::B, -0.02)),
+            KeyCode::Char('C') => Some(Command::Nudge(DeckId::B, 0.02)),
+
+            // Beat nudge: 1/16 beat for transient alignment (focused deck)
+            KeyCode::Char('d') => Some(Command::BeatNudge(self.focused_deck, -0.0625)),
+            KeyCode::Char('D') => Some(Command::BeatNudge(self.focused_deck, 0.0625)),
 
             // Tempo nudge
             KeyCode::Char('[') => Some(Command::AdjustTempo(DeckId::A, -0.01)),
@@ -304,6 +314,8 @@ impl InputHandler {
     }
 
     fn handle_effects_mode(&mut self, key: KeyEvent) -> Option<Command> {
+        let deck = self.focused_deck;
+
         // Handle escape to exit effects mode
         if key.code == KeyCode::Esc {
             self.mode = Mode::Normal;
@@ -311,7 +323,48 @@ impl InputHandler {
             return Some(Command::EnterNormalMode);
         }
 
-        // Handle character input for effect sequences
+        // Handle single-key effect toggles first
+        if let KeyCode::Char(c) = key.code {
+            match c {
+                // Tape stop/start
+                't' => {
+                    self.mode = Mode::Normal;
+                    return Some(Command::TriggerTapeStop(deck));
+                }
+                'T' => {
+                    self.mode = Mode::Normal;
+                    return Some(Command::TriggerTapeStart(deck));
+                }
+                // Flanger toggle
+                'g' => {
+                    self.mode = Mode::Normal;
+                    return Some(Command::ToggleFlanger(deck));
+                }
+                // Bitcrusher toggle
+                'c' => {
+                    self.mode = Mode::Normal;
+                    return Some(Command::ToggleBitcrusher(deck));
+                }
+                // Vinyl emulation toggle
+                'v' => {
+                    self.mode = Mode::Normal;
+                    return Some(Command::ToggleVinyl(deck));
+                }
+                // Filter mode cycle
+                'm' => {
+                    self.mode = Mode::Normal;
+                    return Some(Command::CycleFilterMode(deck));
+                }
+                // Delay modulation cycle
+                'M' => {
+                    self.mode = Mode::Normal;
+                    return Some(Command::CycleDelayModulation(deck));
+                }
+                _ => {}
+            }
+        }
+
+        // Handle character input for effect sequences (d+level, r+level, f+type+level)
         if let KeyCode::Char(c) = key.code {
             self.effect_sequence.push(c);
 
@@ -390,6 +443,9 @@ impl InputHandler {
                 self.mode = Mode::Normal;
                 Some(Command::ToggleHelp)
             }
+            // Scrolling
+            KeyCode::Char('j') | KeyCode::Down => Some(Command::HelpScrollDown),
+            KeyCode::Char('k') | KeyCode::Up => Some(Command::HelpScrollUp),
             _ => None,
         }
     }
@@ -422,18 +478,50 @@ impl InputHandler {
                 Some(Command::LibraryLoadToDeck(self.focused_deck))
             }
 
-            // Filter by key (compatible keys)
-            KeyCode::Char('f') => {
-                // Toggle filter to show only compatible keys
-                // This will be handled by the app to filter based on current playing track
-                Some(Command::LibraryClearFilter) // Toggle behavior
-            }
+            // Filter compatible keys (harmonic mixing)
+            KeyCode::Char('f') => Some(Command::LibraryFilterCompatible),
 
             // Clear filter
             KeyCode::Char('c') => Some(Command::LibraryClearFilter),
 
             // Toggle library visibility
             KeyCode::Char('l') => Some(Command::LibraryToggle),
+
+            // Quick jump to Camelot key (1-9, 0=10) - A keys (minor)
+            KeyCode::Char('1') => Some(Command::LibraryJumpToKey(1, true)),
+            KeyCode::Char('2') => Some(Command::LibraryJumpToKey(2, true)),
+            KeyCode::Char('3') => Some(Command::LibraryJumpToKey(3, true)),
+            KeyCode::Char('4') => Some(Command::LibraryJumpToKey(4, true)),
+            KeyCode::Char('5') => Some(Command::LibraryJumpToKey(5, true)),
+            KeyCode::Char('6') => Some(Command::LibraryJumpToKey(6, true)),
+            KeyCode::Char('7') => Some(Command::LibraryJumpToKey(7, true)),
+            KeyCode::Char('8') => Some(Command::LibraryJumpToKey(8, true)),
+            KeyCode::Char('9') => Some(Command::LibraryJumpToKey(9, true)),
+            KeyCode::Char('0') => Some(Command::LibraryJumpToKey(10, true)),
+            KeyCode::Char('-') => Some(Command::LibraryJumpToKey(11, true)),
+            KeyCode::Char('=') => Some(Command::LibraryJumpToKey(12, true)),
+
+            // Shift+number for B keys (major)
+            KeyCode::Char('!') => Some(Command::LibraryJumpToKey(1, false)),
+            KeyCode::Char('@') => Some(Command::LibraryJumpToKey(2, false)),
+            KeyCode::Char('#') => Some(Command::LibraryJumpToKey(3, false)),
+            KeyCode::Char('$') => Some(Command::LibraryJumpToKey(4, false)),
+            KeyCode::Char('%') => Some(Command::LibraryJumpToKey(5, false)),
+            KeyCode::Char('^') => Some(Command::LibraryJumpToKey(6, false)),
+            KeyCode::Char('&') => Some(Command::LibraryJumpToKey(7, false)),
+            KeyCode::Char('*') => Some(Command::LibraryJumpToKey(8, false)),
+            KeyCode::Char('(') => Some(Command::LibraryJumpToKey(9, false)),
+            KeyCode::Char(')') => Some(Command::LibraryJumpToKey(10, false)),
+            KeyCode::Char('_') => Some(Command::LibraryJumpToKey(11, false)),
+            KeyCode::Char('+') => Some(Command::LibraryJumpToKey(12, false)),
+
+            // BPM jumps (common DJ tempos)
+            KeyCode::Char('q') => Some(Command::LibraryJumpToBpm(120)), // House
+            KeyCode::Char('w') => Some(Command::LibraryJumpToBpm(128)), // Electro
+            KeyCode::Char('e') => Some(Command::LibraryJumpToBpm(130)), // Techno
+            KeyCode::Char('r') => Some(Command::LibraryJumpToBpm(140)), // Trance
+            KeyCode::Char('t') => Some(Command::LibraryJumpToBpm(150)), // Hard
+            KeyCode::Char('y') => Some(Command::LibraryJumpToBpm(170)), // DnB
 
             _ => None,
         }

@@ -152,11 +152,38 @@ pub struct Deck {
     scope_buffer: Box<[f32; Self::SCOPE_BUFFER_SIZE]>,
     /// Write position in scope buffer
     scope_write_pos: usize,
+    /// Fade-in envelope samples remaining (after seek/nudge to prevent clicks)
+    fade_in_samples: u32,
+    /// Fade-out envelope samples remaining (for smooth pause/stop)
+    fade_out_samples: u32,
+    /// Pending state to transition to after fade-out completes
+    pending_state: Option<PlaybackState>,
+    /// Smoothed gain for click-free volume changes
+    smoothed_gain: f32,
 }
 
 impl Deck {
     /// Size of scope buffer (512 stereo samples = 1024 floats)
     const SCOPE_BUFFER_SIZE: usize = 1024;
+
+    /// Fade-in duration in samples (~20ms at 48kHz) to prevent clicks after seek/nudge
+    /// 20ms is safer for live performance than 10ms
+    const FADE_IN_SAMPLES: u32 = 960;
+
+    /// Fade-out duration in samples (~20ms at 48kHz) to prevent clicks on pause/stop
+    const FADE_OUT_SAMPLES: u32 = 960;
+
+    /// Gain smoothing coefficient (higher = slower smoothing, ~0.999 = 20ms time constant)
+    const GAIN_SMOOTH_COEFF: f32 = 0.995;
+
+    /// S-curve fade for perceptually smooth transitions (zero slope at endpoints)
+    /// Input: linear 0.0-1.0, Output: S-curved 0.0-1.0
+    #[inline(always)]
+    fn s_curve(t: f32) -> f32 {
+        // Attempt to use the branch-free multiply-add form
+        // Smoothstep: 3t² - 2t³ = t² * (3 - 2t)
+        t * t * (3.0 - 2.0 * t)
+    }
 
     /// Create a new empty deck
     pub fn new(target_sample_rate: u32) -> Self {
@@ -188,6 +215,13 @@ impl Deck {
             // Scope buffer for oscilloscope visualization
             scope_buffer: Box::new([0.0; Self::SCOPE_BUFFER_SIZE]),
             scope_write_pos: 0,
+            // Fade-in to prevent clicks after seek/nudge
+            fade_in_samples: 0,
+            // Fade-out for smooth pause/stop
+            fade_out_samples: 0,
+            pending_state: None,
+            // Smoothed gain starts at target
+            smoothed_gain: 1.0,
         }
     }
 
@@ -253,19 +287,38 @@ impl Deck {
     /// Start playback
     pub fn play(&mut self) {
         if self.is_loaded() {
+            // Cancel any pending fade-out
+            self.fade_out_samples = 0;
+            self.pending_state = None;
+            // Trigger fade-in for smooth start
+            self.fade_in_samples = Self::FADE_IN_SAMPLES;
             self.state = PlaybackState::Playing;
         }
     }
 
-    /// Pause playback
+    /// Pause playback (with fade-out to prevent clicks)
     pub fn pause(&mut self) {
-        self.state = PlaybackState::Paused;
+        if self.state == PlaybackState::Playing {
+            // Start fade-out, defer actual pause until fade completes
+            self.fade_out_samples = Self::FADE_OUT_SAMPLES;
+            self.pending_state = Some(PlaybackState::Paused);
+        } else {
+            self.state = PlaybackState::Paused;
+        }
     }
 
-    /// Stop playback and reset position
+    /// Stop playback and reset position (with fade-out to prevent clicks)
     pub fn stop(&mut self) {
-        self.state = PlaybackState::Stopped;
-        self.position = 0.0;
+        if self.state == PlaybackState::Playing || self.fade_out_samples > 0 {
+            // Start or continue fade-out, but change destination to Stopped
+            if self.fade_out_samples == 0 {
+                self.fade_out_samples = Self::FADE_OUT_SAMPLES;
+            }
+            self.pending_state = Some(PlaybackState::Stopped);
+        } else {
+            self.state = PlaybackState::Stopped;
+            self.position = 0.0;
+        }
     }
 
     /// Toggle play/pause
@@ -281,12 +334,36 @@ impl Deck {
         let max_pos = self.duration();
         self.position = (position_secs * self.sample_rate as f64 * 2.0)
             .clamp(0.0, max_pos * self.sample_rate as f64 * 2.0);
+        // Trigger fade-in to prevent click at new position
+        self.fade_in_samples = Self::FADE_IN_SAMPLES;
     }
 
     /// Nudge position forward/backward by given seconds
     pub fn nudge(&mut self, delta_secs: f64) {
         let current_secs = self.position / (self.sample_rate as f64 * 2.0);
         self.seek(current_secs + delta_secs);
+    }
+
+    /// Nudge by fraction of a beat (e.g., 0.0625 = 1/16 beat)
+    /// More musical than time-based nudge for beat alignment
+    pub fn beat_nudge(&mut self, beat_fraction: f32) {
+        if let Some(grid) = &self.beat_grid {
+            let samples_per_beat = grid.samples_per_beat_at_tempo(self.tempo);
+            let nudge_samples = beat_fraction as f64 * samples_per_beat;
+            let new_pos = (self.position + nudge_samples).clamp(0.0, self.samples.len() as f64);
+            self.position = new_pos;
+            // Trigger fade-in to prevent click
+            self.fade_in_samples = Self::FADE_IN_SAMPLES;
+        } else if let Some(bpm) = self.bpm {
+            // Fallback: calculate from BPM
+            let beats_per_sec = bpm as f64 / 60.0;
+            let samples_per_beat = (self.sample_rate as f64 * 2.0) / beats_per_sec;
+            let nudge_samples = beat_fraction as f64 * samples_per_beat;
+            let new_pos = (self.position + nudge_samples).clamp(0.0, self.samples.len() as f64);
+            self.position = new_pos;
+            // Trigger fade-in to prevent click
+            self.fade_in_samples = Self::FADE_IN_SAMPLES;
+        }
     }
 
     /// Jump by N beats (positive = forward, negative = backward)
@@ -296,6 +373,8 @@ impl Deck {
             let jump_samples = beats as f64 * samples_per_beat;
             let new_pos = (self.position + jump_samples).clamp(0.0, self.samples.len() as f64);
             self.position = new_pos;
+            // Trigger fade-in to prevent click
+            self.fade_in_samples = Self::FADE_IN_SAMPLES;
         } else if let Some(bpm) = self.bpm {
             // Fallback: calculate from BPM
             let beats_per_sec = bpm as f64 / 60.0;
@@ -303,6 +382,8 @@ impl Deck {
             let jump_samples = beats as f64 * samples_per_beat;
             let new_pos = (self.position + jump_samples).clamp(0.0, self.samples.len() as f64);
             self.position = new_pos;
+            // Trigger fade-in to prevent click
+            self.fade_in_samples = Self::FADE_IN_SAMPLES;
         }
     }
 
@@ -318,6 +399,8 @@ impl Deck {
         if (1..=4).contains(&cue_num) {
             if let Some(pos) = self.cue_points[(cue_num - 1) as usize] {
                 self.position = pos;
+                // Trigger fade-in to prevent click
+                self.fade_in_samples = Self::FADE_IN_SAMPLES;
             }
         }
     }
@@ -427,6 +510,8 @@ impl Deck {
         let new_pos = self.position + samples;
         let max_pos = self.samples.len() as f64;
         self.position = new_pos.clamp(0.0, max_pos);
+        // Trigger fade-in to prevent click
+        self.fade_in_samples = Self::FADE_IN_SAMPLES;
     }
 
     /// Start a smooth sync transition
@@ -507,7 +592,11 @@ impl Deck {
     /// Process and return audio samples for output buffer
     /// Returns stereo interleaved samples
     pub fn process(&mut self, output: &mut [f32]) {
-        if self.state != PlaybackState::Playing || self.samples.is_empty() {
+        // Check if we should output audio:
+        // - Playing state: normal playback
+        // - Fading out: continue playing during fade to prevent clicks
+        let is_fading_out = self.fade_out_samples > 0;
+        if (self.state != PlaybackState::Playing && !is_fading_out) || self.samples.is_empty() {
             // Fill with silence
             for sample in output.iter_mut() {
                 *sample = 0.0;
@@ -529,10 +618,46 @@ impl Deck {
         for frame in output.chunks_mut(2) {
             let pos = self.position as usize;
 
+            // Smooth gain to prevent clicks during volume changes
+            self.smoothed_gain = Self::GAIN_SMOOTH_COEFF * self.smoothed_gain
+                + (1.0 - Self::GAIN_SMOOTH_COEFF) * self.gain;
+
+            // Calculate fade envelope (handles both fade-in and fade-out)
+            // Uses S-curve for perceptually smooth transitions
+            let fade_envelope = if self.fade_out_samples > 0 {
+                // Fade-out: 1.0 -> 0.0 with S-curve
+                let linear = self.fade_out_samples as f32 / Self::FADE_OUT_SAMPLES as f32;
+                self.fade_out_samples -= 1;
+
+                // Check if fade-out completed
+                if self.fade_out_samples == 0 {
+                    if let Some(pending) = self.pending_state.take() {
+                        self.state = pending;
+                        if pending == PlaybackState::Stopped {
+                            self.position = 0.0;
+                        }
+                    }
+                }
+                Self::s_curve(linear)
+            } else if self.fade_in_samples > 0 {
+                // Fade-in: 0.0 -> 1.0 with S-curve
+                let linear = 1.0 - (self.fade_in_samples as f32 / Self::FADE_IN_SAMPLES as f32);
+                self.fade_in_samples -= 1;
+                Self::s_curve(linear)
+            } else {
+                1.0
+            };
+
+            // Combined gain: smoothed gain * fade envelope
+            let effective_gain = self.smoothed_gain * fade_envelope;
+
             if pos + 1 >= sample_count {
-                // End of track
-                self.state = PlaybackState::Stopped;
-                self.position = 0.0;
+                // End of track - trigger fade-out if not already fading
+                if self.fade_out_samples == 0 && self.pending_state.is_none() {
+                    self.fade_out_samples = Self::FADE_OUT_SAMPLES;
+                    self.pending_state = Some(PlaybackState::Stopped);
+                }
+                // Output silence (fade envelope already calculated above handles transition)
                 frame[0] = 0.0;
                 frame[1] = 0.0;
                 continue;
@@ -548,11 +673,11 @@ impl Deck {
                 let l1 = self.samples[pos_even + 2];
                 let r1 = self.samples[pos_even + 3];
 
-                frame[0] = (l0 + frac * (l1 - l0)) * self.gain;
-                frame[1] = (r0 + frac * (r1 - r0)) * self.gain;
+                frame[0] = (l0 + frac * (l1 - l0)) * effective_gain;
+                frame[1] = (r0 + frac * (r1 - r0)) * effective_gain;
             } else {
-                frame[0] = self.samples[pos_even] * self.gain;
-                frame[1] = self.samples[pos_even + 1] * self.gain;
+                frame[0] = self.samples[pos_even] * effective_gain;
+                frame[1] = self.samples[pos_even + 1] * effective_gain;
             }
 
             // Track peak level inline (avoid separate iteration)

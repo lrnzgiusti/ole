@@ -878,6 +878,7 @@ name = "ole-library"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "dirs",
  "ole-analysis",
  "rubato",
  "rusqlite",

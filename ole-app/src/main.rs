@@ -24,9 +24,9 @@ use ratatui::{
 
 use ole_audio::{AudioCommand, AudioEngine, AudioEvent, EngineState};
 use ole_input::{Command, DeckId, Direction, EffectType, InputHandler};
-use ole_library::{AnalysisCache, LibraryScanner, ScanConfig, ScanProgress, TrackLoader};
+use ole_library::{AnalysisCache, Config, LibraryScanner, ScanConfig, ScanProgress, TrackLoader};
 use ole_tui::{
-    App, CamelotWheelWidget, CrossfaderWidget, DeckWidget, FocusedPane, HelpWidget, LibraryWidget,
+    App, CrossfaderWidget, DeckWidget, FocusedPane, HelpWidget, LibraryWidget, MasterVuMeterWidget,
     PhaseWidget, ScopeWidget, SpectrumWidget, StatusBarWidget, Theme,
 };
 
@@ -190,6 +190,9 @@ fn run_app(
     let mut input_handler = InputHandler::new();
     let track_loader = TrackLoader::new();
 
+    // Load user config (last scan folder, etc.)
+    let mut config = Config::load();
+
     // Initialize library cache and scanner
     let cache_path = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -198,16 +201,36 @@ fn run_app(
     let cache = AnalysisCache::open(&cache_path).ok();
     let scanner = cache.map(LibraryScanner::new);
 
-    // Track scan progress receiver
+    // Load cached tracks on startup if we have a last scan folder
+    if config.last_scan_folder.is_some() {
+        if let Some(ref scanner) = scanner {
+            if let Ok(tracks) = scanner.get_all_tracks() {
+                if !tracks.is_empty() {
+                    app.state.library.set_tracks(tracks);
+                }
+            }
+        }
+    }
+
+    // Track scan progress receiver and current scan folder for saving to config
     let mut scan_progress_rx: Option<crossbeam_channel::Receiver<ScanProgress>> = None;
+    let mut current_scan_folder: Option<PathBuf> = None;
 
     let frame_duration = Duration::from_millis(1000 / FPS);
     let mut last_frame = Instant::now();
 
-    // Show startup banner
-    app.state.set_message(
-        "OLE - Open Live Engine | Press ? for help, / for library, :scan <dir> to scan tracks",
-    );
+    // Show startup banner with track count if we loaded cached tracks
+    let track_count = app.state.library.tracks.len();
+    if track_count > 0 {
+        app.state.set_message(format!(
+            "OLE - Loaded {} tracks | Press ? for help, / for library",
+            track_count
+        ));
+    } else {
+        app.state.set_message(
+            "OLE - Open Live Engine | Press ? for help, / for library, :scan <dir> to scan tracks",
+        );
+    }
 
     loop {
         // Check for shutdown
@@ -250,6 +273,12 @@ fn run_app(
                                 app.state.library.set_tracks(tracks);
                             }
                         }
+                        // Save the scanned folder to config for next startup
+                        if let Some(ref folder) = current_scan_folder {
+                            config.last_scan_folder = Some(folder.clone());
+                            let _ = config.save(); // Best effort, don't fail on config save error
+                        }
+                        current_scan_folder = None;
                         app.state.set_success(format!(
                             "Scan complete: {} analyzed, {} cached, {} failed",
                             analyzed, cached, failed
@@ -299,12 +328,13 @@ fn run_app(
                     match &cmd {
                         Command::LibraryScan(path) => {
                             if let Some(ref scanner) = scanner {
-                                let config = ScanConfig {
+                                let scan_config = ScanConfig {
                                     directory: path.clone(),
                                     ..Default::default()
                                 };
-                                let (rx, _handle) = scanner.scan_async(config);
+                                let (rx, _handle) = scanner.scan_async(scan_config);
                                 scan_progress_rx = Some(rx);
+                                current_scan_folder = Some(path.clone());
                                 app.state.library.is_scanning = true;
                                 app.state
                                     .set_message(format!("Starting scan of {}...", path.display()));
@@ -376,6 +406,8 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
         Command::Seek(DeckId::B, pos) => engine.send(AudioCommand::SeekB(pos)),
         Command::Nudge(DeckId::A, delta) => engine.send(AudioCommand::NudgeA(delta)),
         Command::Nudge(DeckId::B, delta) => engine.send(AudioCommand::NudgeB(delta)),
+        Command::BeatNudge(DeckId::A, beats) => engine.send(AudioCommand::BeatNudgeA(beats)),
+        Command::BeatNudge(DeckId::B, beats) => engine.send(AudioCommand::BeatNudgeB(beats)),
 
         // Beatjump
         Command::Beatjump(DeckId::A, beats) => engine.send(AudioCommand::BeatjumpA(beats)),
@@ -434,6 +466,24 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
         }
         Command::ToggleEffect(DeckId::B, EffectType::Reverb) => {
             engine.send(AudioCommand::ToggleReverbB)
+        }
+        Command::ToggleEffect(DeckId::A, EffectType::TapeStop) => {
+            engine.send(AudioCommand::ToggleTapeStopA)
+        }
+        Command::ToggleEffect(DeckId::B, EffectType::TapeStop) => {
+            engine.send(AudioCommand::ToggleTapeStopB)
+        }
+        Command::ToggleEffect(DeckId::A, EffectType::Flanger) => {
+            engine.send(AudioCommand::ToggleFlangerA)
+        }
+        Command::ToggleEffect(DeckId::B, EffectType::Flanger) => {
+            engine.send(AudioCommand::ToggleFlangerB)
+        }
+        Command::ToggleEffect(DeckId::A, EffectType::Bitcrusher) => {
+            engine.send(AudioCommand::ToggleBitcrusherA)
+        }
+        Command::ToggleEffect(DeckId::B, EffectType::Bitcrusher) => {
+            engine.send(AudioCommand::ToggleBitcrusherB)
         }
         Command::AdjustFilterCutoff(DeckId::A, delta) => {
             engine.send(AudioCommand::AdjustFilterCutoffA(delta))
@@ -533,8 +583,36 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
         Command::LibrarySelectFirst => app.state.library.select_first(),
         Command::LibrarySelectLast => app.state.library.select_last(),
         Command::LibraryFilterByKey(key) => app.state.library.set_filter(Some(key)),
-        Command::LibraryClearFilter => app.state.library.set_filter(None),
+        Command::LibraryFilterByBpmRange(min, max) => {
+            // For now, just jump to min BPM - could add range filter later
+            if app.state.library.jump_to_bpm(min) {
+                app.state.set_message(format!("◈ BPM {}-{}", min, max));
+            }
+        }
+        Command::LibraryFilterCompatible => {
+            app.state.library.filter_compatible();
+            app.state.set_message("♫ Showing compatible keys");
+        }
+        Command::LibraryClearFilter => {
+            app.state.library.set_filter(None);
+            app.state.set_message("◎ Filter cleared");
+        }
         Command::LibraryToggle => app.state.toggle_library(),
+        Command::LibraryJumpToKey(pos, is_minor) => {
+            let key_str = format!("{}{}", pos, if is_minor { 'A' } else { 'B' });
+            if app.state.library.jump_to_key(pos, is_minor) {
+                app.state.set_message(format!("→ Key {}", key_str));
+            } else {
+                app.state.set_warning(format!("No tracks in {}", key_str));
+            }
+        }
+        Command::LibraryJumpToBpm(bpm) => {
+            if app.state.library.jump_to_bpm(bpm) {
+                app.state.set_message(format!("→ ~{} BPM", bpm));
+            } else {
+                app.state.set_warning(format!("No tracks near {} BPM", bpm));
+            }
+        }
 
         // LibraryScan and LibraryLoadToDeck are handled specially in main loop
         Command::LibraryScan(_) | Command::LibraryLoadToDeck(_) => {}
@@ -669,6 +747,72 @@ fn handle_command(app: &mut App, engine: &AudioEngine, loader: &TrackLoader, cmd
             let name = app.state.crt_effects.intensity.name();
             app.state.set_message(format!("▶ CRT intensity: {}", name));
         }
+
+        // Mastering chain commands
+        Command::ToggleMastering => {
+            engine.send(AudioCommand::ToggleMastering);
+            // Show feedback based on current state (will be toggled by engine)
+            let status = if app.state.mastering_enabled {
+                "OFF"
+            } else {
+                "ON"
+            };
+            app.state.set_message(format!("▶ Mastering {}", status));
+        }
+        Command::SetMasteringPreset(preset) => {
+            engine.send(AudioCommand::SetMasteringPreset(preset));
+            app.state
+                .set_message(format!("▶ Mastering: {}", preset.display_name()));
+        }
+        Command::CycleMasteringPreset => {
+            engine.send(AudioCommand::CycleMasteringPreset);
+            // Show next preset (will be cycled by engine)
+            let next = app.state.mastering_preset.next();
+            app.state
+                .set_message(format!("▶ Mastering: {}", next.display_name()));
+        }
+
+        // Tape Stop commands
+        Command::ToggleTapeStop(deck) => match deck {
+            DeckId::A => engine.send(AudioCommand::ToggleTapeStopA),
+            DeckId::B => engine.send(AudioCommand::ToggleTapeStopB),
+        },
+        Command::TriggerTapeStop(deck) => {
+            match deck {
+                DeckId::A => engine.send(AudioCommand::TriggerTapeStopA),
+                DeckId::B => engine.send(AudioCommand::TriggerTapeStopB),
+            }
+            app.state.set_message("▼ Tape Stop");
+        }
+        Command::TriggerTapeStart(deck) => {
+            match deck {
+                DeckId::A => engine.send(AudioCommand::TriggerTapeStartA),
+                DeckId::B => engine.send(AudioCommand::TriggerTapeStartB),
+            }
+            app.state.set_message("▲ Tape Start");
+        }
+
+        // Flanger commands
+        Command::ToggleFlanger(deck) => {
+            match deck {
+                DeckId::A => engine.send(AudioCommand::ToggleFlangerA),
+                DeckId::B => engine.send(AudioCommand::ToggleFlangerB),
+            }
+            app.state.set_message("◊ Flanger toggled");
+        }
+
+        // Bitcrusher commands
+        Command::ToggleBitcrusher(deck) => {
+            match deck {
+                DeckId::A => engine.send(AudioCommand::ToggleBitcrusherA),
+                DeckId::B => engine.send(AudioCommand::ToggleBitcrusherB),
+            }
+            app.state.set_message("░ Bitcrusher toggled");
+        }
+
+        // Help scrolling
+        Command::HelpScrollUp => app.state.help_scroll_up(),
+        Command::HelpScrollDown => app.state.help_scroll_down(),
     }
 }
 
@@ -857,16 +1001,25 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         .beat_grid_info
         .as_ref()
         .is_some_and(|g| g.has_grid);
+    let bpm_a = app.state.deck_a.bpm.unwrap_or(0.0) * app.state.deck_a.tempo;
+    let bpm_b = app.state.deck_b.bpm.unwrap_or(0.0) * app.state.deck_b.tempo;
     let phase = PhaseWidget::new(theme)
         .phases(app.state.deck_a.beat_phase, app.state.deck_b.beat_phase)
+        .bpms(bpm_a, bpm_b)
         .has_grids(has_grid_a, has_grid_b);
     frame.render_widget(phase, mixer_chunks[0]);
 
-    // Camelot wheel - harmonic mixing visualization
-    let camelot = CamelotWheelWidget::new(theme)
-        .key_a(app.state.deck_a.key.as_deref())
-        .key_b(app.state.deck_b.key.as_deref());
-    frame.render_widget(camelot, mixer_chunks[1]);
+    // Master VU meter - shows deck levels with peak hold and LUFS
+    let vu_meter = MasterVuMeterWidget::new(theme)
+        .levels(app.state.deck_a.peak_level, app.state.deck_b.peak_level)
+        .peak_holds(
+            app.state.crt_effects.vu_peak_a,
+            app.state.crt_effects.vu_peak_b,
+        )
+        .clipping(app.state.deck_a.is_clipping, app.state.deck_b.is_clipping)
+        .lufs(app.state.mastering_lufs.momentary)
+        .gain_reduction(app.state.mastering_gain_reduction);
+    frame.render_widget(vu_meter, mixer_chunks[1]);
 
     // Crossfader with BPM difference display
     let crossfader = CrossfaderWidget::new(app.state.crossfader, theme)
@@ -897,10 +1050,10 @@ fn render_ui(frame: &mut ratatui::Frame, app: &mut App) {
         .effects(effects_a, effects_b);
     frame.render_widget(status, chunks[status_idx]);
 
-    // Help overlay
+    // Help overlay (scrollable)
     if app.state.show_help {
-        let help_area = centered_rect(65, 37, area);
-        let help = HelpWidget::new(theme);
+        let help_area = centered_rect(72, 40, area);
+        let help = HelpWidget::new(theme).scroll(app.state.help_scroll);
         frame.render_widget(help, help_area);
     }
 

@@ -13,9 +13,12 @@ use ratatui::{
 ///
 /// Shows a horizontal track with a marker indicating the phase difference.
 /// When decks are in sync, the marker is centered.
+/// Also displays offset in milliseconds for precise alignment.
 pub struct PhaseWidget<'a> {
     phase_a: f32, // Beat phase of deck A (0.0-1.0)
     phase_b: f32, // Beat phase of deck B (0.0-1.0)
+    bpm_a: f32,   // BPM of deck A (for ms calculation)
+    bpm_b: f32,   // BPM of deck B (for ms calculation)
     theme: &'a Theme,
     has_grid_a: bool, // Whether deck A has a beat grid
     has_grid_b: bool, // Whether deck B has a beat grid
@@ -26,6 +29,8 @@ impl<'a> PhaseWidget<'a> {
         Self {
             phase_a: 0.0,
             phase_b: 0.0,
+            bpm_a: 0.0,
+            bpm_b: 0.0,
             theme,
             has_grid_a: false,
             has_grid_b: false,
@@ -38,10 +43,27 @@ impl<'a> PhaseWidget<'a> {
         self
     }
 
+    pub fn bpms(mut self, bpm_a: f32, bpm_b: f32) -> Self {
+        self.bpm_a = bpm_a;
+        self.bpm_b = bpm_b;
+        self
+    }
+
     pub fn has_grids(mut self, has_grid_a: bool, has_grid_b: bool) -> Self {
         self.has_grid_a = has_grid_a;
         self.has_grid_b = has_grid_b;
         self
+    }
+
+    /// Calculate offset in milliseconds (positive = B is ahead)
+    fn offset_ms(&self) -> Option<f32> {
+        let avg_bpm = (self.bpm_a + self.bpm_b) / 2.0;
+        if avg_bpm < 1.0 {
+            return None;
+        }
+        let ms_per_beat = 60000.0 / avg_bpm;
+        let phase_diff = self.phase_difference();
+        Some(phase_diff * ms_per_beat)
     }
 
     /// Calculate the phase difference between decks
@@ -164,13 +186,29 @@ impl Widget for PhaseWidget<'_> {
             .set_style(self.theme.deck_b_style());
 
         // Render status text on the line above (if we have space)
-        if inner.height >= 2 && !status.is_empty() {
+        if inner.height >= 2 {
             let status_y = inner.y;
-            let status_x = inner.x + (width.saturating_sub(status.len())) as u16 / 2;
-            for (i, ch) in status.chars().enumerate() {
-                let sx = status_x + i as u16;
-                if sx < inner.x + inner.width {
-                    buf[(sx, status_y)].set_char(ch).set_style(marker_style);
+
+            // Show offset in ms for precise alignment (e.g., "+12ms" or "-5ms")
+            let offset_text = if let Some(ms) = self.offset_ms() {
+                if ms.abs() < 1.0 {
+                    "SYNC".to_string()
+                } else if ms > 0.0 {
+                    format!("+{:.0}ms", ms)
+                } else {
+                    format!("{:.0}ms", ms)
+                }
+            } else {
+                status.to_string()
+            };
+
+            if !offset_text.is_empty() {
+                let status_x = inner.x + (width.saturating_sub(offset_text.len())) as u16 / 2;
+                for (i, ch) in offset_text.chars().enumerate() {
+                    let sx = status_x + i as u16;
+                    if sx < inner.x + inner.width {
+                        buf[(sx, status_y)].set_char(ch).set_style(marker_style);
+                    }
                 }
             }
         }

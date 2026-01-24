@@ -38,9 +38,16 @@ pub struct VinylEmulator {
 
     /// Current preset
     current_preset: VinylPreset,
+
+    /// Wet envelope for click-free enable/disable
+    wet_target: f32,
+    wet_current: f32,
 }
 
 impl VinylEmulator {
+    /// Wet envelope smoothing coefficient (~10ms at 48kHz)
+    const WET_SMOOTH_COEFF: f32 = 0.9995;
+
     /// Create a new vinyl emulator
     pub fn new(sample_rate: f32) -> Self {
         Self {
@@ -50,22 +57,22 @@ impl VinylEmulator {
             warmth: AnalogWarmth::new(sample_rate),
             noise: VinylNoise::new(sample_rate),
             current_preset: VinylPreset::default(),
+            wet_target: 0.0,
+            wet_current: 0.0,
         }
     }
 
-    /// Enable/disable all vinyl effects
+    /// Enable/disable all vinyl effects (with smooth crossfade)
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+        self.wet_target = if enabled { 1.0 } else { 0.0 };
         // Enable sub-components when master is enabled
         if enabled {
             self.wow_flutter.set_enabled(true);
             self.warmth.set_enabled(true);
             self.noise.set_enabled(true);
-        } else {
-            self.wow_flutter.set_enabled(false);
-            self.warmth.set_enabled(false);
-            self.noise.set_enabled(false);
         }
+        // Note: don't disable sub-components immediately - let them fade out
     }
 
     /// Check if enabled
@@ -186,15 +193,37 @@ impl VinylEmulator {
     /// Call this after deck playback to add vinyl character.
     /// The speed modulation is handled separately via get_speed_multiplier().
     pub fn process_audio(&mut self, samples: &mut [f32]) {
-        if !self.enabled {
+        // Skip processing only if fully disabled and envelope has settled
+        if !self.enabled && self.wet_current < 0.0001 {
+            // Disable sub-components once fully faded
+            self.wow_flutter.set_enabled(false);
+            self.warmth.set_enabled(false);
+            self.noise.set_enabled(false);
             return;
         }
 
-        // Apply warmth (RIAA EQ, saturation, compression)
-        self.warmth.process(samples);
+        // Process with wet envelope crossfade for click-free toggling
+        for frame in samples.chunks_mut(2) {
+            if frame.len() == 2 {
+                // Smooth wet envelope toward target
+                self.wet_current = Self::WET_SMOOTH_COEFF * self.wet_current
+                    + (1.0 - Self::WET_SMOOTH_COEFF) * self.wet_target;
 
-        // Add vinyl noise
-        self.noise.process(samples);
+                // Save dry signal
+                let dry_l = frame[0];
+                let dry_r = frame[1];
+
+                // Apply warmth (RIAA EQ, saturation, compression)
+                self.warmth.process(frame);
+
+                // Add vinyl noise
+                self.noise.process(frame);
+
+                // Crossfade between dry and wet based on envelope
+                frame[0] = dry_l * (1.0 - self.wet_current) + frame[0] * self.wet_current;
+                frame[1] = dry_r * (1.0 - self.wet_current) + frame[1] * self.wet_current;
+            }
+        }
     }
 
     /// Process audio samples (alias for process_audio)
@@ -252,8 +281,20 @@ mod tests {
         assert!(vinyl.warmth.is_enabled());
         assert!(vinyl.noise.is_enabled());
 
+        // Disable - but sub-components stay enabled until fade-out completes
         vinyl.set_enabled(false);
         assert!(!vinyl.enabled);
+        // Sub-components remain enabled for click-free fade-out
+        assert!(vinyl.wow_flutter.is_enabled());
+        assert!(vinyl.warmth.is_enabled());
+        assert!(vinyl.noise.is_enabled());
+
+        // Process enough samples to complete fade-out, then sub-components disable
+        let mut samples = vec![0.0f32; 4096];
+        for _ in 0..100 {
+            vinyl.process_audio(&mut samples);
+        }
+        // After fade-out completes, sub-components should be disabled
         assert!(!vinyl.wow_flutter.is_enabled());
         assert!(!vinyl.warmth.is_enabled());
         assert!(!vinyl.noise.is_enabled());

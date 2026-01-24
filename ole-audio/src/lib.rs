@@ -10,6 +10,7 @@
 mod deck;
 mod effects;
 mod engine;
+pub mod mastering;
 mod mixer;
 pub mod timestretcher;
 mod vinyl;
@@ -20,6 +21,10 @@ pub use effects::{
     LadderFilter, Reverb, StateVariableFilter, SvfOutputType,
 };
 pub use engine::{AudioCommand, AudioEngine, AudioEvent, EngineState};
+pub use mastering::{
+    LoudnessMeter, LufsValues, MasteringChain, MasteringCompressor, MasteringEQ, MasteringPreset,
+    MasteringSaturation, SaturationMode, StereoEnhancer,
+};
 pub use mixer::{CrossfaderCurve, Mixer};
 pub use timestretcher::{FftSize, PhaseLockMode, PhaseVocoder, TimeStretchParams};
 pub use vinyl::{

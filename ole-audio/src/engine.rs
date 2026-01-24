@@ -2,9 +2,10 @@
 
 use crate::deck::{Deck, DeckState};
 use crate::effects::{
-    Delay, DelayModulation, Effect, Filter, FilterMode, FilterType, LadderFilter, Reverb,
-    StateVariableFilter, SvfOutputType,
+    Bitcrusher, Delay, DelayModulation, Effect, Filter, FilterMode, FilterType, Flanger,
+    LadderFilter, Limiter, Reverb, StateVariableFilter, SvfOutputType, TapeStop,
 };
+use crate::mastering::{LufsValues, MasteringChain, MasteringPreset};
 use crate::mixer::Mixer;
 use crate::timestretcher::{FftSize, PhaseVocoder};
 use crate::vinyl::{VinylEmulator, VinylPreset};
@@ -46,6 +47,8 @@ pub enum AudioCommand {
     SeekB(f64),
     NudgeA(f64),
     NudgeB(f64),
+    BeatNudgeA(f32), // Nudge by fraction of beat (e.g., 0.0625 = 1/16)
+    BeatNudgeB(f32),
     BeatjumpA(i32), // Jump by N beats
     BeatjumpB(i32),
     SetCueA(u8), // Set cue point 1-4
@@ -129,6 +132,39 @@ pub enum AudioCommand {
     SetDelayModulationA(DelayModulation),
     SetDelayModulationB(DelayModulation),
 
+    // Mastering chain
+    ToggleMastering,
+    SetMasteringPreset(MasteringPreset),
+    CycleMasteringPreset,
+
+    // Tape Stop effect
+    ToggleTapeStopA,
+    ToggleTapeStopB,
+    TriggerTapeStopA,
+    TriggerTapeStopB,
+    TriggerTapeStartA,
+    TriggerTapeStartB,
+    SetTapeStopTimeA(f32),
+    SetTapeStopTimeB(f32),
+
+    // Flanger effect
+    ToggleFlangerA,
+    ToggleFlangerB,
+    SetFlangerRateA(f32),
+    SetFlangerRateB(f32),
+    SetFlangerDepthA(f32),
+    SetFlangerDepthB(f32),
+    SetFlangerFeedbackA(f32),
+    SetFlangerFeedbackB(f32),
+
+    // Bitcrusher effect
+    ToggleBitcrusherA,
+    ToggleBitcrusherB,
+    SetBitcrusherBitsA(u8),
+    SetBitcrusherBitsB(u8),
+    SetBitcrusherDownsampleA(u8),
+    SetBitcrusherDownsampleB(u8),
+
     // System
     Shutdown,
 }
@@ -175,6 +211,11 @@ pub enum AudioEvent {
         time_stretch_a_ratio: f32,
         time_stretch_b_enabled: bool,
         time_stretch_b_ratio: f32,
+        // Mastering state
+        mastering_enabled: bool,
+        mastering_preset: MasteringPreset,
+        mastering_lufs: LufsValues,
+        mastering_gain_reduction: f32,
     },
     /// Track loaded successfully
     TrackLoaded { deck: char },
@@ -211,6 +252,19 @@ pub struct EngineState {
     // Phase vocoder for time stretching
     pub phase_vocoder_a: PhaseVocoder,
     pub phase_vocoder_b: PhaseVocoder,
+    // Mastering chain (EQ, compressor, saturation, stereo enhancement)
+    pub mastering: MasteringChain,
+    // Master limiter (brickwall, always on for safety)
+    pub master_limiter: Limiter,
+    // Tape stop effect
+    pub tape_stop_a: TapeStop,
+    pub tape_stop_b: TapeStop,
+    // Flanger effect
+    pub flanger_a: Flanger,
+    pub flanger_b: Flanger,
+    // Bitcrusher effect
+    pub bitcrusher_a: Bitcrusher,
+    pub bitcrusher_b: Bitcrusher,
     sample_rate: u32,
     // Current effect levels (0 = off, 1-5 for delay/reverb, 1-10 for filter)
     filter_a_level: u8,
@@ -253,6 +307,19 @@ impl EngineState {
             // Phase vocoder (disabled by default, medium FFT size for balance)
             phase_vocoder_a: PhaseVocoder::new(FftSize::Medium),
             phase_vocoder_b: PhaseVocoder::new(FftSize::Medium),
+            // Mastering chain (enabled by default with Clean preset)
+            mastering: MasteringChain::new(sample_rate as f32),
+            // Master limiter (always on for safety, -0.1dBFS ceiling)
+            master_limiter: Limiter::new(sample_rate as f32),
+            // Tape stop effects
+            tape_stop_a: TapeStop::new(sample_rate as f32),
+            tape_stop_b: TapeStop::new(sample_rate as f32),
+            // Flanger effects
+            flanger_a: Flanger::new(sample_rate as f32),
+            flanger_b: Flanger::new(sample_rate as f32),
+            // Bitcrusher effects
+            bitcrusher_a: Bitcrusher::new(sample_rate as f32),
+            bitcrusher_b: Bitcrusher::new(sample_rate as f32),
             sample_rate,
             filter_a_level: 0,
             filter_b_level: 0,
@@ -311,6 +378,7 @@ impl EngineState {
             AudioCommand::ToggleA => self.deck_a.toggle(),
             AudioCommand::SeekA(pos) => self.deck_a.seek(pos),
             AudioCommand::NudgeA(delta) => self.deck_a.nudge(delta),
+            AudioCommand::BeatNudgeA(beats) => self.deck_a.beat_nudge(beats),
             AudioCommand::BeatjumpA(beats) => self.deck_a.beatjump(beats),
             AudioCommand::SetCueA(num) => self.deck_a.set_cue(num),
             AudioCommand::JumpCueA(num) => self.deck_a.jump_cue(num),
@@ -329,6 +397,7 @@ impl EngineState {
             AudioCommand::ToggleB => self.deck_b.toggle(),
             AudioCommand::SeekB(pos) => self.deck_b.seek(pos),
             AudioCommand::NudgeB(delta) => self.deck_b.nudge(delta),
+            AudioCommand::BeatNudgeB(beats) => self.deck_b.beat_nudge(beats),
             AudioCommand::BeatjumpB(beats) => self.deck_b.beatjump(beats),
             AudioCommand::SetCueB(num) => self.deck_b.set_cue(num),
             AudioCommand::JumpCueB(num) => self.deck_b.jump_cue(num),
@@ -653,6 +722,98 @@ impl EngineState {
                 self.delay_b_modulation = mode;
             }
 
+            // Mastering chain commands
+            AudioCommand::ToggleMastering => {
+                let enabled = !self.mastering.is_enabled();
+                self.mastering.set_enabled(enabled);
+            }
+            AudioCommand::SetMasteringPreset(preset) => {
+                self.mastering.set_preset(preset);
+            }
+            AudioCommand::CycleMasteringPreset => {
+                self.mastering.cycle_preset();
+            }
+
+            // Tape Stop commands
+            AudioCommand::ToggleTapeStopA => {
+                let enabled = !self.tape_stop_a.is_enabled();
+                self.tape_stop_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleTapeStopB => {
+                let enabled = !self.tape_stop_b.is_enabled();
+                self.tape_stop_b.set_enabled(enabled);
+            }
+            AudioCommand::TriggerTapeStopA => {
+                self.tape_stop_a.set_enabled(true);
+                self.tape_stop_a.trigger_stop();
+            }
+            AudioCommand::TriggerTapeStopB => {
+                self.tape_stop_b.set_enabled(true);
+                self.tape_stop_b.trigger_stop();
+            }
+            AudioCommand::TriggerTapeStartA => {
+                self.tape_stop_a.trigger_start();
+            }
+            AudioCommand::TriggerTapeStartB => {
+                self.tape_stop_b.trigger_start();
+            }
+            AudioCommand::SetTapeStopTimeA(time) => {
+                self.tape_stop_a.set_stop_time(time);
+            }
+            AudioCommand::SetTapeStopTimeB(time) => {
+                self.tape_stop_b.set_stop_time(time);
+            }
+
+            // Flanger commands
+            AudioCommand::ToggleFlangerA => {
+                let enabled = !self.flanger_a.is_enabled();
+                self.flanger_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleFlangerB => {
+                let enabled = !self.flanger_b.is_enabled();
+                self.flanger_b.set_enabled(enabled);
+            }
+            AudioCommand::SetFlangerRateA(rate) => {
+                self.flanger_a.set_rate(rate);
+            }
+            AudioCommand::SetFlangerRateB(rate) => {
+                self.flanger_b.set_rate(rate);
+            }
+            AudioCommand::SetFlangerDepthA(depth) => {
+                self.flanger_a.set_depth(depth);
+            }
+            AudioCommand::SetFlangerDepthB(depth) => {
+                self.flanger_b.set_depth(depth);
+            }
+            AudioCommand::SetFlangerFeedbackA(fb) => {
+                self.flanger_a.set_feedback(fb);
+            }
+            AudioCommand::SetFlangerFeedbackB(fb) => {
+                self.flanger_b.set_feedback(fb);
+            }
+
+            // Bitcrusher commands
+            AudioCommand::ToggleBitcrusherA => {
+                let enabled = !self.bitcrusher_a.is_enabled();
+                self.bitcrusher_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleBitcrusherB => {
+                let enabled = !self.bitcrusher_b.is_enabled();
+                self.bitcrusher_b.set_enabled(enabled);
+            }
+            AudioCommand::SetBitcrusherBitsA(bits) => {
+                self.bitcrusher_a.set_bits(bits);
+            }
+            AudioCommand::SetBitcrusherBitsB(bits) => {
+                self.bitcrusher_b.set_bits(bits);
+            }
+            AudioCommand::SetBitcrusherDownsampleA(ds) => {
+                self.bitcrusher_a.set_downsample(ds);
+            }
+            AudioCommand::SetBitcrusherDownsampleB(ds) => {
+                self.bitcrusher_b.set_downsample(ds);
+            }
+
             AudioCommand::Shutdown => {} // Handled at higher level
         }
     }
@@ -709,6 +870,11 @@ impl EngineState {
             time_stretch_a_ratio: self.phase_vocoder_a.stretch_ratio(),
             time_stretch_b_enabled: self.phase_vocoder_b.is_enabled(),
             time_stretch_b_ratio: self.phase_vocoder_b.stretch_ratio(),
+            // Mastering state
+            mastering_enabled: self.mastering.is_enabled(),
+            mastering_preset: self.mastering.preset(),
+            mastering_lufs: self.mastering.lufs(),
+            mastering_gain_reduction: self.mastering.gain_reduction_db(),
         }
     }
 
@@ -852,44 +1018,76 @@ impl EngineState {
         self.deck_b.process(buf_b);
 
         // Apply effects chain:
-        // Deck → Vinyl Emulation → Filter → Delay → Reverb → Mixer
+        // Deck → Tape Stop → Vinyl → Bitcrusher → Filter → Flanger → Delay → Reverb → Mixer
 
         // Deck A chain
-        // 1. Vinyl emulation (adds warmth, noise, wow/flutter)
+        // 1. Tape stop (pitch slowdown effect)
+        self.tape_stop_a.process(buf_a);
+
+        // 2. Vinyl emulation (adds warmth, noise, wow/flutter)
         self.vinyl_a.process(buf_a);
 
-        // 2. Filter (mode-selected)
+        // 3. Bitcrusher (lo-fi crunch)
+        self.bitcrusher_a.process(buf_a);
+
+        // 4. Filter (mode-selected)
         match self.filter_mode_a {
             FilterMode::Biquad => self.filter_a.process(buf_a),
             FilterMode::Ladder => self.ladder_a.process(buf_a),
             FilterMode::SVF => self.svf_a.process(buf_a),
         }
 
-        // 3. Delay
+        // 5. Flanger (sweeping comb filter)
+        self.flanger_a.process(buf_a);
+
+        // 6. Delay
         self.delay_a.process(buf_a);
 
-        // 4. Reverb
+        // 7. Reverb
         self.reverb_a.process(buf_a);
 
         // Deck B chain
-        // 1. Vinyl emulation
+        // 1. Tape stop
+        self.tape_stop_b.process(buf_b);
+
+        // 2. Vinyl emulation
         self.vinyl_b.process(buf_b);
 
-        // 2. Filter (mode-selected)
+        // 3. Bitcrusher
+        self.bitcrusher_b.process(buf_b);
+
+        // 4. Filter (mode-selected)
         match self.filter_mode_b {
             FilterMode::Biquad => self.filter_b.process(buf_b),
             FilterMode::Ladder => self.ladder_b.process(buf_b),
             FilterMode::SVF => self.svf_b.process(buf_b),
         }
 
-        // 3. Delay
+        // 5. Flanger
+        self.flanger_b.process(buf_b);
+
+        // 6. Delay
         self.delay_b.process(buf_b);
 
-        // 4. Reverb
+        // 7. Reverb
         self.reverb_b.process(buf_b);
 
         // Mix to output
         self.mixer.mix(buf_a, buf_b, output);
+
+        // Mastering chain - EQ, compression, saturation, stereo enhancement
+        // Applied before the limiter for transparent processing
+        self.mastering.process(output);
+
+        // Master limiter - brickwall limiting to prevent clipping
+        self.master_limiter.process(output);
+
+        // Final safety hard clip at limiter ceiling (-1.0 dBFS = 0.891)
+        // This should never trigger if the limiter is working correctly
+        const CEILING: f32 = 0.891;
+        for sample in output.iter_mut() {
+            *sample = sample.clamp(-CEILING, CEILING);
+        }
     }
 }
 

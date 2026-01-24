@@ -95,6 +95,9 @@ pub struct Delay {
     hp_coeff: f32,
     /// Enabled state
     enabled: bool,
+    /// Wet envelope for click-free enable/disable
+    wet_target: f32,
+    wet_current: f32,
 }
 
 impl Delay {
@@ -125,8 +128,13 @@ impl Delay {
             hp_state_r: 0.0,
             hp_coeff,
             enabled: false,
+            wet_target: 0.0,
+            wet_current: 0.0,
         }
     }
+
+    /// Wet envelope smoothing coefficient (~10ms at 48kHz)
+    const WET_SMOOTH_COEFF: f32 = 0.9995;
 
     /// Set delay time in milliseconds
     pub fn set_delay_ms(&mut self, ms: f32) {
@@ -296,7 +304,8 @@ impl Delay {
 
 impl Effect for Delay {
     fn process(&mut self, samples: &mut [f32]) {
-        if !self.enabled {
+        // Skip processing only if fully disabled and envelope has settled
+        if !self.enabled && self.wet_current < 0.0001 {
             return;
         }
 
@@ -304,6 +313,10 @@ impl Effect for Delay {
             if frame.len() < 2 {
                 continue;
             }
+
+            // Smooth wet envelope toward target
+            self.wet_current = Self::WET_SMOOTH_COEFF * self.wet_current
+                + (1.0 - Self::WET_SMOOTH_COEFF) * self.wet_target;
 
             // Smooth delay time changes
             self.delay_samples = self.delay_samples * self.delay_smooth
@@ -330,15 +343,22 @@ impl Effect for Delay {
             let fb_l = Self::soft_saturate(hp_out_l);
             let fb_r = Self::soft_saturate(hp_out_r);
 
-            // Write to buffer
+            // Write to buffer (only write input when enabled, allows tails to play out)
             let write_idx = self.write_pos * 2;
-            self.buffer[write_idx] = fb_l;
-            self.buffer[write_idx + 1] = fb_r;
+            if self.enabled {
+                self.buffer[write_idx] = fb_l;
+                self.buffer[write_idx + 1] = fb_r;
+            } else {
+                // When disabled, don't feed new input but let delay tails decay
+                self.buffer[write_idx] = delayed_l * self.feedback * 0.95;
+                self.buffer[write_idx + 1] = delayed_r * self.feedback * 0.95;
+            }
 
-            // Mix dry and wet signals
-            let dry = 1.0 - self.mix;
-            frame[0] = frame[0] * dry + delayed_l * self.mix;
-            frame[1] = frame[1] * dry + delayed_r * self.mix;
+            // Mix dry and wet signals with envelope
+            let effective_mix = self.mix * self.wet_current;
+            let dry = 1.0 - effective_mix;
+            frame[0] = frame[0] * dry + delayed_l * effective_mix;
+            frame[1] = frame[1] * dry + delayed_r * effective_mix;
 
             // Advance write position
             self.write_pos = (self.write_pos + 1) % self.buffer_frames;
@@ -360,9 +380,8 @@ impl Effect for Delay {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
-        if !enabled {
-            self.reset();
-        }
+        self.wet_target = if enabled { 1.0 } else { 0.0 };
+        // Note: don't reset on disable - let delay tails naturally fade out
     }
 
     fn name(&self) -> &'static str {

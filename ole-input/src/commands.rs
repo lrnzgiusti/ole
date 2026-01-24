@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 // Re-export types for use in commands
-pub use ole_audio::{DelayModulation, FilterMode, FilterType};
+pub use ole_audio::{DelayModulation, FilterMode, FilterType, MasteringPreset};
 
 /// Deck identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +27,9 @@ pub enum EffectType {
     Filter,
     Delay,
     Reverb,
+    TapeStop,
+    Flanger,
+    Bitcrusher,
 }
 
 /// Vinyl preset (1-5)
@@ -56,7 +59,8 @@ pub enum Command {
     // Seeking
     Seek(DeckId, f64),
     Nudge(DeckId, f64),
-    Beatjump(DeckId, i32), // Jump by N beats (negative = backward)
+    BeatNudge(DeckId, f32), // Nudge by fraction of beat (e.g., 0.0625 = 1/16 beat)
+    Beatjump(DeckId, i32),  // Jump by N beats (negative = backward)
 
     // Cue points
     SetCue(DeckId, u8),  // Set cue point 1-4
@@ -134,8 +138,12 @@ pub enum Command {
     LibrarySelectLast,
     LibraryLoadToDeck(DeckId),
     LibraryFilterByKey(String),
+    LibraryFilterByBpmRange(u16, u16), // Filter by BPM range (min, max)
+    LibraryFilterCompatible,           // Filter to harmonically compatible keys
     LibraryClearFilter,
     LibraryToggle,
+    LibraryJumpToKey(u8, bool), // Jump to key (1-12 Camelot position, true=A/false=B)
+    LibraryJumpToBpm(u16),      // Jump to first track near this BPM
 
     // Application
     Quit,
@@ -150,4 +158,24 @@ pub enum Command {
     ToggleNoise,       // Static noise effect
     ToggleChromatic,   // RGB chromatic aberration
     CycleCrtIntensity, // Cycle through Off/Subtle/Medium/Heavy
+
+    // Mastering chain
+    ToggleMastering,                     // Toggle mastering on/off
+    SetMasteringPreset(MasteringPreset), // Set mastering preset
+    CycleMasteringPreset,                // Cycle through presets
+
+    // Tape Stop effect
+    ToggleTapeStop(DeckId),
+    TriggerTapeStop(DeckId),  // Start the stop effect
+    TriggerTapeStart(DeckId), // Spin back up
+
+    // Flanger effect
+    ToggleFlanger(DeckId),
+
+    // Bitcrusher effect
+    ToggleBitcrusher(DeckId),
+
+    // Help navigation
+    HelpScrollUp,
+    HelpScrollDown,
 }

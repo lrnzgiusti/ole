@@ -38,6 +38,10 @@ pub struct LadderFilter {
     // Thermal noise simulation (subtle random variations)
     thermal_l: f32,
     thermal_r: f32,
+
+    // Wet envelope for click-free enable/disable
+    wet_target: f32,
+    wet_current: f32,
 }
 
 impl LadderFilter {
@@ -61,8 +65,13 @@ impl LadderFilter {
             smoothing_coeff: 1.0 - (-1.0 / (0.005 * sample_rate)).exp(),
             thermal_l: 0.0,
             thermal_r: 0.0,
+            wet_target: 0.0,
+            wet_current: 0.0,
         }
     }
+
+    /// Wet envelope smoothing coefficient (~10ms at 48kHz)
+    const WET_SMOOTH_COEFF: f32 = 0.9995;
 
     /// Set cutoff frequency (20-20000 Hz)
     pub fn set_cutoff(&mut self, cutoff: f32) {
@@ -194,7 +203,8 @@ impl LadderFilter {
 
 impl Effect for LadderFilter {
     fn process(&mut self, samples: &mut [f32]) {
-        if !self.enabled {
+        // Skip processing only if fully disabled and envelope has settled
+        if !self.enabled && self.wet_current < 0.0001 {
             return;
         }
 
@@ -203,8 +213,17 @@ impl Effect for LadderFilter {
 
         for frame in samples.chunks_mut(2) {
             if frame.len() == 2 {
-                frame[0] = self.process_sample(frame[0], false);
-                frame[1] = self.process_sample(frame[1], true);
+                // Smooth wet envelope toward target
+                self.wet_current = Self::WET_SMOOTH_COEFF * self.wet_current
+                    + (1.0 - Self::WET_SMOOTH_COEFF) * self.wet_target;
+
+                // Process through filter
+                let wet_l = self.process_sample(frame[0], false);
+                let wet_r = self.process_sample(frame[1], true);
+
+                // Crossfade between dry and wet based on envelope
+                frame[0] = frame[0] * (1.0 - self.wet_current) + wet_l * self.wet_current;
+                frame[1] = frame[1] * (1.0 - self.wet_current) + wet_r * self.wet_current;
             }
         }
     }
@@ -228,9 +247,8 @@ impl Effect for LadderFilter {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
-        if !enabled {
-            self.reset();
-        }
+        self.wet_target = if enabled { 1.0 } else { 0.0 };
+        // Note: don't reset on disable - let filter state fade out naturally
     }
 
     fn name(&self) -> &'static str {

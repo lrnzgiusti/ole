@@ -104,6 +104,88 @@ impl LibraryState {
         self.scroll_offset = 0;
     }
 
+    /// Filter to harmonically compatible keys based on current playing track
+    pub fn filter_compatible(&mut self) {
+        if let Some(ref current_key) = self.current_playing_key {
+            if let Some(camelot) = CamelotKey::parse(current_key) {
+                // Get all compatible keys
+                let compatible: Vec<String> = camelot
+                    .compatible_keys()
+                    .iter()
+                    .map(|k| k.to_string())
+                    .collect();
+
+                // Store compatible keys as comma-separated for display, or use first one
+                if !compatible.is_empty() {
+                    // Just use first compatible key for simple filter
+                    self.filter_key = Some(compatible[0].clone());
+                    self.selected_index = 0;
+                    self.scroll_offset = 0;
+                }
+            }
+        }
+    }
+
+    /// Jump to first track matching a Camelot key (e.g., 8A, 3B)
+    /// Returns true if a matching track was found
+    pub fn jump_to_key(&mut self, position: u8, is_minor: bool) -> bool {
+        let key_str = format!("{}{}", position, if is_minor { 'A' } else { 'B' });
+
+        // Clear any existing filter first
+        self.filter_key = None;
+
+        // Find first track with this key
+        for (i, track) in self.tracks.iter().enumerate() {
+            if track.key.as_ref().map(|k| k == &key_str).unwrap_or(false) {
+                self.selected_index = i;
+                self.scroll_offset = i.saturating_sub(5); // Center it a bit
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Jump to first track near a target BPM (within ±3 BPM)
+    /// Returns true if a matching track was found
+    pub fn jump_to_bpm(&mut self, target_bpm: u16) -> bool {
+        // Clear any existing filter first
+        self.filter_key = None;
+
+        let target = target_bpm as f32;
+
+        // Find first track within ±3 BPM
+        for (i, track) in self.tracks.iter().enumerate() {
+            if let Some(bpm) = track.bpm {
+                if (bpm - target).abs() <= 3.0 {
+                    self.selected_index = i;
+                    self.scroll_offset = i.saturating_sub(5);
+                    return true;
+                }
+            }
+        }
+
+        // If no exact match, find closest
+        let mut closest_idx = 0;
+        let mut closest_diff = f32::MAX;
+        for (i, track) in self.tracks.iter().enumerate() {
+            if let Some(bpm) = track.bpm {
+                let diff = (bpm - target).abs();
+                if diff < closest_diff {
+                    closest_diff = diff;
+                    closest_idx = i;
+                }
+            }
+        }
+
+        if closest_diff < f32::MAX {
+            self.selected_index = closest_idx;
+            self.scroll_offset = closest_idx.saturating_sub(5);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Update scroll offset to keep selection visible
     fn update_scroll(&mut self, visible_height: usize) {
         if visible_height == 0 {

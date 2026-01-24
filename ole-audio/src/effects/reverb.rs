@@ -114,6 +114,10 @@ pub struct Reverb {
     cached_feedback: f32,
     cached_wet1: f32,
     cached_wet2: f32,
+
+    // Wet envelope for click-free enable/disable
+    wet_target: f32,
+    wet_current: f32,
 }
 
 impl Reverb {
@@ -158,8 +162,13 @@ impl Reverb {
             cached_feedback: room_size * 0.24 + 0.6,
             cached_wet1: wet * (width * 0.5 + 0.5),
             cached_wet2: wet * ((1.0 - width) * 0.5),
+            wet_target: 0.0,
+            wet_current: 0.0,
         }
     }
+
+    /// Wet envelope smoothing coefficient (~10ms at 48kHz)
+    const WET_SMOOTH_COEFF: f32 = 0.9995;
 
     /// Update cached computed values (called when parameters change)
     #[inline]
@@ -236,7 +245,9 @@ impl Reverb {
         self.room_size = room_size;
         self.damping = damping;
         self.wet = wet;
-        self.dry = 1.0; // Always keep full dry signal
+        // Proportional dry: reduce dry as wet increases to prevent > 1.0 sum
+        // This keeps some original signal while allowing full reverb effect
+        self.dry = 1.0 - wet * 0.5;
         self.update_cached();
 
         // Auto-enable when setting a level
@@ -283,9 +294,15 @@ impl Reverb {
         let wet1 = self.cached_wet1;
         let wet2 = self.cached_wet2;
 
-        // Final mix - wet reverb + dry original
-        let final_l = out_l * wet1 + out_r * wet2 + left * self.dry;
-        let final_r = out_r * wet1 + out_l * wet2 + right * self.dry;
+        // Normalize: ensure total gain doesn't exceed 1.0
+        // With width=1.0: wet1=wet, wet2=0, so total_wet = wet
+        // We scale dry down so that dry + total_wet <= 1.0
+        let total_wet = wet1 + wet2;
+        let dry_norm = self.dry * (1.0 - total_wet).max(0.0);
+
+        // Final mix - wet reverb + normalized dry original
+        let final_l = out_l * wet1 + out_r * wet2 + left * dry_norm;
+        let final_r = out_r * wet1 + out_l * wet2 + right * dry_norm;
 
         // Soft clip to prevent any remaining distortion
         (soft_clip(final_l), soft_clip(final_r))
@@ -305,16 +322,27 @@ fn soft_clip(x: f32) -> f32 {
 
 impl Effect for Reverb {
     fn process(&mut self, samples: &mut [f32]) {
-        if !self.enabled {
+        // Skip processing only if fully disabled and envelope has settled
+        if !self.enabled && self.wet_current < 0.0001 {
             return;
         }
 
         // Process stereo pairs
         for chunk in samples.chunks_mut(2) {
             if chunk.len() == 2 {
-                let (left, right) = self.process_sample(chunk[0], chunk[1]);
-                chunk[0] = left;
-                chunk[1] = right;
+                // Smooth wet envelope toward target
+                self.wet_current = Self::WET_SMOOTH_COEFF * self.wet_current
+                    + (1.0 - Self::WET_SMOOTH_COEFF) * self.wet_target;
+
+                // Process through reverb
+                let (wet_l, wet_r) = self.process_sample(chunk[0], chunk[1]);
+
+                // Crossfade between dry and wet based on envelope
+                // process_sample already mixes dry/wet, so we interpolate the full output
+                let dry_l = chunk[0];
+                let dry_r = chunk[1];
+                chunk[0] = dry_l * (1.0 - self.wet_current) + wet_l * self.wet_current;
+                chunk[1] = dry_r * (1.0 - self.wet_current) + wet_r * self.wet_current;
             }
         }
     }
@@ -340,10 +368,8 @@ impl Effect for Reverb {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
-        if !enabled {
-            self.reset();
-            self.level = 0;
-        }
+        self.wet_target = if enabled { 1.0 } else { 0.0 };
+        // Note: don't reset on disable - let reverb tails naturally fade out
     }
 
     fn name(&self) -> &'static str {

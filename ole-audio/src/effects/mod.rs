@@ -1,16 +1,24 @@
 //! Audio effects for OLE
 
+mod bitcrusher;
 mod delay;
 mod filter;
+mod flanger;
 mod ladder_filter;
+mod limiter;
 mod reverb;
 mod svf;
+mod tape_stop;
 
+pub use bitcrusher::Bitcrusher;
 pub use delay::{Delay, DelayInterpolation, DelayModulation};
 pub use filter::{Filter, FilterType};
+pub use flanger::Flanger;
 pub use ladder_filter::LadderFilter;
+pub use limiter::Limiter;
 pub use reverb::Reverb;
 pub use svf::{StateVariableFilter, SvfOutputType};
+pub use tape_stop::TapeStop;
 
 /// Filter mode - selects which filter implementation to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

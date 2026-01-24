@@ -140,14 +140,107 @@ impl Widget for StatusBarWidget<'_> {
     }
 }
 
-/// Help overlay widget
+/// Help overlay widget with scrolling support
 pub struct HelpWidget<'a> {
     theme: &'a Theme,
+    scroll: u16,
 }
 
 impl<'a> HelpWidget<'a> {
     pub fn new(theme: &'a Theme) -> Self {
-        Self { theme }
+        Self { theme, scroll: 0 }
+    }
+
+    pub fn scroll(mut self, scroll: u16) -> Self {
+        self.scroll = scroll;
+        self
+    }
+
+    fn help_lines() -> Vec<&'static str> {
+        vec![
+            "╔════════════════════════════════════════════════════════════════╗",
+            "║              OLE - Open Live Engine v0.1                       ║",
+            "║                  ↑/↓ or j/k to scroll                          ║",
+            "╠════════════════════════════════════════════════════════════════╣",
+            "║ TRANSPORT                    DECK A        DECK B              ║",
+            "║   Play/Pause                   a             A                 ║",
+            "║   Pause                        s             S                 ║",
+            "║   Stop                         z             Z                 ║",
+            "║   Nudge ±                      x/c           X/C               ║",
+            "║   Tempo ±0.01                 [/]           ,/.                ║",
+            "║   Tempo ±0.1                  {/}           </>                ║",
+            "║   Gain ±                      -/=           _/+                ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ NAVIGATION & MIXING                                            ║",
+            "║   Tab           Switch focus between decks                     ║",
+            "║   ↑ / ↓         Beatjump +/- 4 beats (focused deck)            ║",
+            "║   1-4           Jump to cue point (Shift+1-4 to set)           ║",
+            "║   h / l         Crossfader left / right                        ║",
+            "║   \\             Center crossfader                              ║",
+            "║   b / B         Sync B→A / A→B (tempo + phase)                 ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ EFFECTS (press 'e' to enter FX mode on focused deck)           ║",
+            "║                                                                ║",
+            "║   d + 0-5       Delay: 0=off, 1=100ms ... 5=500ms              ║",
+            "║   r + 0-5       Reverb: 0=off, 1=subtle ... 5=cathedral        ║",
+            "║   f + 0         Filter off                                     ║",
+            "║   f + l/b/h + 1-0   Filter: l=lowpass b=band h=highpass        ║",
+            "║                                                                ║",
+            "║   g             Flanger toggle (sweeping jet effect)           ║",
+            "║   t             Tape Stop - trigger slowdown effect            ║",
+            "║   T             Tape Start - spin back up                      ║",
+            "║   c             Bitcrusher toggle (lo-fi crunch)               ║",
+            "║   v             Vinyl emulation toggle (warmth + crackle)      ║",
+            "║                                                                ║",
+            "║   Esc           Exit effects mode                              ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ FILTER MODES (in effects mode)                                 ║",
+            "║   m             Cycle filter mode: Biquad → Ladder → SVF       ║",
+            "║                 • Biquad: Clean digital                        ║",
+            "║                 • Ladder: Moog-style analog warmth             ║",
+            "║                 • SVF: State Variable (clean, all outputs)     ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ DELAY MODULATION (in effects mode with delay active)           ║",
+            "║   M             Cycle: Off → Subtle → Classic → Heavy          ║",
+            "║                 Adds tape-style wow/flutter to delay           ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ MASTERING                                                      ║",
+            "║   Ctrl-m        Toggle mastering chain on/off                  ║",
+            "║   Ctrl-M        Cycle preset: Clean → Warm → Punchy → Loud     ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ VISUALS                                                        ║",
+            "║   o             Toggle oscilloscope / spectrum analyzer        ║",
+            "║   O             Cycle scope mode (waveform / lissajous)        ║",
+            "║   Ctrl-c        Toggle CRT effects                             ║",
+            "║   Ctrl-g        Toggle phosphor glow                           ║",
+            "║   Ctrl-n        Toggle static noise                            ║",
+            "║   Ctrl-r        Toggle RGB chromatic aberration                ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ COMMANDS (:)                                                   ║",
+            "║   :load a <path>      Load track to deck A                     ║",
+            "║   :load b <path>      Load track to deck B                     ║",
+            "║   :scan <directory>   Scan directory for tracks                ║",
+            "║   :theme <name>       green / amber / cyber / phosphor         ║",
+            "║   :q                  Quit                                     ║",
+            "╠────────────────────────────────────────────────────────────────╣",
+            "║ LIBRARY BROWSER (press '/' to open)                            ║",
+            "║   j / k         Navigate down / up                             ║",
+            "║   g / G         Jump to first / last track                     ║",
+            "║   Enter         Load selected track to focused deck            ║",
+            "║   a / b         Load to deck A / B                             ║",
+            "║   f             Filter harmonically compatible keys            ║",
+            "║   c             Clear filter                                   ║",
+            "║                                                                ║",
+            "║   1-0, -, =     Jump to Camelot key 1A-12A (minor)             ║",
+            "║   Shift+above   Jump to Camelot key 1B-12B (major)             ║",
+            "║                                                                ║",
+            "║   q/w/e/r/t/y   Jump to BPM: 120/128/130/140/150/170           ║",
+            "║   Esc           Close browser                                  ║",
+            "╠════════════════════════════════════════════════════════════════╣",
+            "║               Press Esc or ? to close help                     ║",
+            "║                    Ctrl-Q to quit OLE                          ║",
+            "╚════════════════════════════════════════════════════════════════╝",
+        ]
     }
 }
 
@@ -160,49 +253,23 @@ impl Widget for HelpWidget<'_> {
             }
         }
 
-        let help_text = vec![
-            "╔══════════════════════════════════════════════════════════╗",
-            "║           OLE - Open Live Engine v0.1                    ║",
-            "╠══════════════════════════════════════════════════════════╣",
-            "║ TRANSPORT              DECK A      DECK B                ║",
-            "║   Play/Pause             a           A                   ║",
-            "║   Pause                  s           S                   ║",
-            "║   Stop                   z           Z                   ║",
-            "║   Nudge ±                x/c         X/C                 ║",
-            "║   Tempo ±0.01           [/]         ,/.                  ║",
-            "║   Tempo ±0.1            {/}         </>                  ║",
-            "║   Gain ±                -/=         _/+                  ║",
-            "╠──────────────────────────────────────────────────────────╣",
-            "║ NAVIGATION & MIXING                                      ║",
-            "║   Tab         Switch focus between decks                 ║",
-            "║   ↑ / ↓       Beatjump +/- 4 beats (focused deck)        ║",
-            "║   1-4         Jump to cue point (Shift+1-4 to set)       ║",
-            "║   h / l       Crossfader left / right                    ║",
-            "║   \\           Center crossfader                          ║",
-            "║   b / B       Sync B→A / A→B (tempo + phase)             ║",
-            "╠──────────────────────────────────────────────────────────╣",
-            "║ EFFECTS (press 'e' to enter FX mode on focused deck)     ║",
-            "║   d + 0-5     Delay: 0=off, 1=100ms ... 5=500ms          ║",
-            "║   r + 0-5     Reverb: 0=off, 1=subtle ... 5=cathedral    ║",
-            "║   f + 0       Filter off                                 ║",
-            "║   f + l/b/h + 1-0   Filter: l=low b=band h=high +level   ║",
-            "║   Esc         Exit effects mode                          ║",
-            "╠──────────────────────────────────────────────────────────╣",
-            "║ COMMANDS (:)                                             ║",
-            "║   :load a <path>    Load track to deck A                 ║",
-            "║   :load b <path>    Load track to deck B                 ║",
-            "║   :theme <name>     green / amber / cyber                ║",
-            "║   :q                Quit                                 ║",
-            "╠──────────────────────────────────────────────────────────╣",
-            "║              Esc or ? to close  │  Ctrl-Q to quit        ║",
-            "╚══════════════════════════════════════════════════════════╝",
-        ];
+        let help_text = Self::help_lines();
+        let total_lines = help_text.len() as u16;
+        let visible_lines = area.height.min(total_lines);
 
-        let start_y = area.y + area.height.saturating_sub(help_text.len() as u16) / 2;
-        let start_x = area.x + area.width.saturating_sub(62) / 2;
+        // Clamp scroll to valid range
+        let max_scroll = total_lines.saturating_sub(visible_lines);
+        let scroll = self.scroll.min(max_scroll);
 
-        for (i, line) in help_text.iter().enumerate() {
-            let y = start_y + i as u16;
+        let start_x = area.x + area.width.saturating_sub(68) / 2;
+
+        for (i, line) in help_text
+            .iter()
+            .skip(scroll as usize)
+            .take(visible_lines as usize)
+            .enumerate()
+        {
+            let y = area.y + i as u16;
             if y >= area.y + area.height {
                 break;
             }
@@ -230,6 +297,22 @@ impl Widget for HelpWidget<'_> {
                 };
 
                 buf[(x, y)].set_char(ch).set_style(style);
+            }
+        }
+
+        // Show scroll indicator if content is scrollable
+        if total_lines > visible_lines {
+            let indicator = format!(" [{}/{}] ", scroll + 1, max_scroll + 1);
+            let indicator_x = area.x + area.width.saturating_sub(indicator.len() as u16 + 2);
+            let indicator_y = area.y + area.height - 1;
+
+            for (i, ch) in indicator.chars().enumerate() {
+                let x = indicator_x + i as u16;
+                if x < area.x + area.width {
+                    buf[(x, indicator_y)]
+                        .set_char(ch)
+                        .set_style(self.theme.dim());
+                }
             }
         }
     }

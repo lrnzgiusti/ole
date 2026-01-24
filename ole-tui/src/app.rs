@@ -2,7 +2,7 @@
 
 use crate::theme::{Theme, CRT_AMBER, CRT_GREEN, CYBERPUNK};
 use crate::widgets::{LibraryState, ScopeMode};
-use ole_audio::{AudioEvent, DeckState, FilterMode, FilterType};
+use ole_audio::{AudioEvent, DeckState, FilterMode, FilterType, LufsValues, MasteringPreset};
 use ole_input::Mode;
 
 /// Number of spectrum bands
@@ -148,9 +148,9 @@ impl Default for CrtEffects {
             // New CRT effects - most disabled by default to prevent visual artifacts
             crt_enabled: true,
             intensity,
-            glow_enabled: false,      // Disabled by default - causes color bleeding
+            glow_enabled: false, // Disabled by default - causes color bleeding
             glow_intensity: intensity.glow_intensity(),
-            noise_enabled: false,     // Disabled by default - causes visual artifacts
+            noise_enabled: false, // Disabled by default - causes visual artifacts
             noise_intensity: intensity.noise_intensity(),
             chromatic_enabled: false, // Disabled by default - causes color shifting on UI elements
             chromatic_offset: intensity.chromatic_offset(),
@@ -374,6 +374,7 @@ pub struct AppState {
     pub message: Option<String>,
     pub message_type: MessageType,
     pub show_help: bool,
+    pub help_scroll: u16,
 
     // Library state
     pub library: LibraryState,
@@ -406,6 +407,12 @@ pub struct AppState {
 
     // Sync quality (0.0-1.0, used for glow effect when decks are phase-locked)
     pub sync_quality: f32,
+
+    // Mastering chain state
+    pub mastering_enabled: bool,
+    pub mastering_preset: MasteringPreset,
+    pub mastering_lufs: LufsValues,
+    pub mastering_gain_reduction: f32,
 }
 
 impl Default for AppState {
@@ -443,6 +450,7 @@ impl Default for AppState {
             message: None,
             message_type: MessageType::Info,
             show_help: false,
+            help_scroll: 0,
             // Library state
             library: LibraryState::default(),
             show_library: true,
@@ -463,6 +471,11 @@ impl Default for AppState {
             crt_effects: CrtEffects::default(),
             // Sync quality
             sync_quality: 0.0,
+            // Mastering state
+            mastering_enabled: true,
+            mastering_preset: MasteringPreset::default(),
+            mastering_lufs: LufsValues::default(),
+            mastering_gain_reduction: 0.0,
         }
     }
 }
@@ -498,6 +511,10 @@ impl AppState {
                 reverb_a_level,
                 reverb_b_enabled,
                 reverb_b_level,
+                mastering_enabled,
+                mastering_preset,
+                mastering_lufs,
+                mastering_gain_reduction,
                 // New fields (vinyl, time stretch, delay modulation) - to be used in UI later
                 ..
             } => {
@@ -526,6 +543,11 @@ impl AppState {
                 self.reverb_a_level = reverb_a_level;
                 self.reverb_b_enabled = reverb_b_enabled;
                 self.reverb_b_level = reverb_b_level;
+                // Mastering state
+                self.mastering_enabled = mastering_enabled;
+                self.mastering_preset = mastering_preset;
+                self.mastering_lufs = mastering_lufs;
+                self.mastering_gain_reduction = mastering_gain_reduction;
             }
             AudioEvent::TrackLoaded { deck } => {
                 self.set_success(format!("Track loaded to deck {}", deck));
@@ -549,6 +571,19 @@ impl AppState {
     /// Toggle help display
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+        if self.show_help {
+            self.help_scroll = 0; // Reset scroll when opening
+        }
+    }
+
+    /// Scroll help up
+    pub fn help_scroll_up(&mut self) {
+        self.help_scroll = self.help_scroll.saturating_sub(3);
+    }
+
+    /// Scroll help down
+    pub fn help_scroll_down(&mut self) {
+        self.help_scroll = self.help_scroll.saturating_add(3);
     }
 
     /// Toggle library display
