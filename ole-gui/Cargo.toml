@@ -1,16 +1,17 @@
 [package]
-name = "ole-tui"
+name = "ole-gui"
 version.workspace = true
 edition.workspace = true
-description = "Terminal UI for OLE - widgets, themes, layout"
+description = "OLE - Cyberpunk DJ GUI (egui)"
 
 [dependencies]
-ole-analysis.workspace = true
 ole-audio.workspace = true
+ole-analysis.workspace = true
 ole-input.workspace = true
 ole-library.workspace = true
 
-ratatui.workspace = true
-crossterm.workspace = true
+eframe.workspace = true
+egui.workspace = true
 crossbeam-channel.workspace = true
-ringbuf.workspace = true
+dirs.workspace = true
+tracing.workspace = true

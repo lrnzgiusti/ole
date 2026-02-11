@@ -272,33 +272,25 @@ impl Stft {
         debug_assert!(output_l.len() >= self.num_bins());
         debug_assert!(output_r.len() >= self.num_bins());
 
-        // Apply window and copy to work buffer (left channel)
-        self.apply_window_and_fft(&self.input_buffer_l.clone(), output_l);
+        let input_pos = self.input_pos;
+        let start = if input_pos == 0 { 0 } else { input_pos };
+        let num_bins = self.num_bins();
 
-        // Apply window and copy to work buffer (right channel)
-        self.apply_window_and_fft(&self.input_buffer_r.clone(), output_r);
-    }
-
-    /// Apply window, perform FFT, and extract positive frequencies
-    fn apply_window_and_fft(&mut self, input: &[f32], output: &mut [Complex]) {
-        let start = if self.input_pos == 0 {
-            0
-        } else {
-            self.input_pos
-        };
-
-        // Apply window with circular buffer handling
+        // Apply window to left channel and FFT (no clone - direct indexing)
         for i in 0..self.size {
             let idx = (start + i) % self.size;
-            self.work[i] = Complex::new(input[idx] * self.window[i], 0.0);
+            self.work[i] = Complex::new(self.input_buffer_l[idx] * self.window[i], 0.0);
         }
-
-        // In-place FFT
         self.fft_in_place(false);
+        output_l[..num_bins].copy_from_slice(&self.work[..num_bins]);
 
-        // Copy positive frequencies to output
-        let num_bins = self.num_bins();
-        output[..num_bins].copy_from_slice(&self.work[..num_bins]);
+        // Apply window to right channel and FFT (no clone - direct indexing)
+        for i in 0..self.size {
+            let idx = (start + i) % self.size;
+            self.work[i] = Complex::new(self.input_buffer_r[idx] * self.window[i], 0.0);
+        }
+        self.fft_in_place(false);
+        output_r[..num_bins].copy_from_slice(&self.work[..num_bins]);
     }
 
     /// Perform inverse FFT and overlap-add to output buffer

@@ -5,6 +5,29 @@ use std::path::PathBuf;
 // Re-export types for use in commands
 pub use ole_audio::{DelayModulation, FilterMode, FilterType, MasteringPreset};
 
+/// Input modes (vim-style)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    #[default]
+    Normal,
+    Command,
+    Effects,
+    Help,
+    Browser,
+}
+
+impl Mode {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Mode::Normal => "NORMAL",
+            Mode::Command => "COMMAND",
+            Mode::Effects => "EFFECTS",
+            Mode::Help => "HELP",
+            Mode::Browser => "BROWSE",
+        }
+    }
+}
+
 /// Deck identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeckId {
@@ -132,6 +155,7 @@ pub enum Command {
 
     // Library/Browser
     LibraryScan(PathBuf),
+    LibraryRescan, // Force rescan with massive parallelism
     LibrarySelectNext,
     LibrarySelectPrev,
     LibrarySelectFirst,

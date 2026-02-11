@@ -291,14 +291,30 @@ impl Delay {
             return 0.0;
         }
 
-        // Sine LFO
-        let mod_val = (self.mod_phase * 2.0 * PI).sin();
+        // Parabolic sine LFO (faster than std sin, good enough for modulation)
+        let mod_val = Self::parabolic_sin(self.mod_phase);
         self.mod_phase += self.mod_phase_inc;
         if self.mod_phase >= 1.0 {
             self.mod_phase -= 1.0;
         }
 
         mod_val * self.modulation.depth()
+    }
+
+    /// Fast parabolic sine approximation for LFO modulation
+    /// Input: phase in [0, 1) representing one cycle
+    /// Output: approximation of sin(2π * phase)
+    #[inline(always)]
+    fn parabolic_sin(phase: f32) -> f32 {
+        let x = phase * 2.0; // [0, 2]
+        if x < 1.0 {
+            // First half: [0, 1] → values [0, 1, 0]
+            4.0 * x * (1.0 - x)
+        } else {
+            // Second half: [1, 2] → values [0, -1, 0]
+            let x2 = x - 1.0;
+            -4.0 * x2 * (1.0 - x2)
+        }
     }
 }
 

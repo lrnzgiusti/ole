@@ -164,27 +164,20 @@ impl WaveformAnalyzer {
             .map(|c| c.norm_sqr())
             .sum();
 
-        // Normalize by band width
-        let bass_avg = if bass_end_bin > 1 {
-            bass_energy / (bass_end_bin - 1) as f32
-        } else {
-            0.0
-        };
-        let mid_avg = if mid_end_bin > bass_end_bin {
-            mid_energy / (mid_end_bin - bass_end_bin) as f32
-        } else {
-            0.0
-        };
-        let high_avg = if nyquist_bin > mid_end_bin {
-            high_energy / (nyquist_bin - mid_end_bin) as f32
-        } else {
-            0.0
-        };
+        // Use total energy per band (not per-bin average) with perceptual weights.
+        // Per-bin normalization is heavily biased towards bass because the bass range
+        // only spans 1-2 FFT bins at 512-point FFT / 44.1kHz, giving it a tiny divisor.
+        // Instead, compare total band energy with perceptual compensation:
+        // - Bass is naturally louder in music, so scale it down
+        // - High frequencies have less energy but are perceptually important
+        let bass_weighted = bass_energy * 0.3;
+        let mid_weighted = mid_energy * 1.0;
+        let high_weighted = high_energy * 3.0;
 
         // Determine dominant band
-        if bass_avg >= mid_avg && bass_avg >= high_avg {
+        if bass_weighted >= mid_weighted && bass_weighted >= high_weighted {
             FrequencyBand::Bass
-        } else if high_avg >= mid_avg {
+        } else if high_weighted >= mid_weighted {
             FrequencyBand::High
         } else {
             FrequencyBand::Mid

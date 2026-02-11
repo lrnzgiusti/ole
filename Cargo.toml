@@ -3,7 +3,7 @@ members = [
     "ole-app",
     "ole-audio",
     "ole-analysis",
-    "ole-tui",
+    "ole-gui",
     "ole-input",
     "ole-library",
 ]
@@ -33,9 +33,9 @@ rubato = "0.14"
 # Analysis
 rustfft = "6.2"
 
-# TUI
-ratatui = "0.29"
-crossterm = "0.28"
+# GUI
+eframe = "0.30"
+egui = "0.30"
 
 # Concurrency
 crossbeam-channel = "0.5"
@@ -53,6 +53,6 @@ dirs = "5.0"
 # Internal crates
 ole-audio = { path = "ole-audio" }
 ole-analysis = { path = "ole-analysis" }
-ole-tui = { path = "ole-tui" }
+ole-gui = { path = "ole-gui" }
 ole-input = { path = "ole-input" }
 ole-library = { path = "ole-library" }

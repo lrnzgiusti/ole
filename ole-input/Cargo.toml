@@ -2,9 +2,7 @@
 name = "ole-input"
 version.workspace = true
 edition.workspace = true
-description = "Input handling for OLE - vim-style modal keyboard"
+description = "Input types for OLE - command definitions and modes"
 
 [dependencies]
 ole-audio.workspace = true
-crossterm.workspace = true
-thiserror.workspace = true

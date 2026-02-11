@@ -11,16 +11,16 @@ path = "src/main.rs"
 [dependencies]
 ole-audio.workspace = true
 ole-analysis.workspace = true
-ole-tui.workspace = true
+ole-gui.workspace = true
 ole-input.workspace = true
 ole-library.workspace = true
 
 cpal.workspace = true
-ratatui.workspace = true
-crossterm.workspace = true
+eframe.workspace = true
+egui.workspace = true
 crossbeam-channel.workspace = true
 ringbuf.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 dirs.workspace = true

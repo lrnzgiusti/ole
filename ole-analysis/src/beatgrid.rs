@@ -72,6 +72,18 @@ pub struct BeatGridAnalyzer {
     window: Vec<f32>,
 }
 
+/// Perceptual weighting for BPM values
+///
+/// Returns a log-Gaussian weight centered at ~120 BPM, favoring
+/// typical dance music tempos. BPMs far from 120 receive lower weight.
+fn perceptual_weight(bpm: f32) -> f32 {
+    let log_bpm = bpm.ln();
+    let log_center = 120.0_f32.ln();
+    let sigma = 0.5; // ~0.5 octave spread
+    let diff = (log_bpm - log_center) / sigma;
+    (-0.5 * diff * diff).exp()
+}
+
 impl BeatGridAnalyzer {
     /// Create a new beat grid analyzer
     pub fn new(sample_rate: u32) -> Self {
@@ -212,7 +224,41 @@ impl BeatGridAnalyzer {
         peaks
     }
 
-    /// Compute correlation at a specific lag
+    /// Compute full autocorrelation using FFT (Wiener-Khinchin theorem)
+    ///
+    /// This is O(N log N) instead of O(N²) for computing all lags at once.
+    fn compute_autocorrelation_fft(&self, onset_fn: &[f32]) -> Vec<f32> {
+        let n = onset_fn.len();
+        let padded_len = (n * 2).next_power_of_two();
+
+        // Zero-pad input
+        let mut padded: Vec<Complex<f32>> = onset_fn
+            .iter()
+            .map(|&x| Complex::new(x, 0.0))
+            .chain(std::iter::repeat(Complex::new(0.0, 0.0)))
+            .take(padded_len)
+            .collect();
+
+        // Forward FFT
+        let mut planner = FftPlanner::new();
+        let fft = planner.plan_fft_forward(padded_len);
+        fft.process(&mut padded);
+
+        // Power spectrum (|X(f)|²)
+        for c in &mut padded {
+            *c = Complex::new(c.norm_sqr(), 0.0);
+        }
+
+        // Inverse FFT
+        let ifft = planner.plan_fft_inverse(padded_len);
+        ifft.process(&mut padded);
+
+        // Normalize and extract real part
+        let scale = 1.0 / padded_len as f32;
+        padded[..n].iter().map(|c| c.re * scale).collect()
+    }
+
+    /// Compute correlation at a specific lag (for verification/small cases)
     fn correlation_at_lag(&self, onset_fn: &[f32], lag: usize) -> f32 {
         if lag == 0 || lag >= onset_fn.len() / 2 {
             return 0.0;
@@ -236,10 +282,10 @@ impl BeatGridAnalyzer {
         }
     }
 
-    /// Estimate BPM using autocorrelation of the onset function
+    /// Estimate BPM using FFT-based autocorrelation of the onset function
     ///
-    /// Autocorrelation finds periodic patterns by correlating the signal with delayed versions of itself.
-    /// The lag with highest correlation corresponds to the beat period.
+    /// Uses Wiener-Khinchin theorem for O(N log N) autocorrelation instead of O(N²).
+    /// The lag with highest perceptually-weighted correlation corresponds to the beat period.
     fn estimate_bpm_autocorrelation(&self, onset_fn: &[f32]) -> Option<(f32, f32)> {
         if onset_fn.len() < 500 {
             return None;
@@ -255,15 +301,29 @@ impl BeatGridAnalyzer {
         let analysis_len = onset_fn.len().min(max_lag * 8);
         let analysis = &onset_fn[..analysis_len];
 
+        // Compute full autocorrelation using FFT
+        let autocorr = self.compute_autocorrelation_fft(analysis);
+
+        // Find peak in autocorrelation with perceptual weighting
         let mut best_lag = min_lag;
-        let mut best_correlation = 0.0f32;
+        let mut best_score = f32::MIN;
+        let mut best_raw_correlation = 0.0f32;
 
-        for lag in min_lag..max_lag.min(analysis_len / 2) {
-            let correlation = self.correlation_at_lag(analysis, lag);
+        for (lag, &correlation) in autocorr
+            .iter()
+            .enumerate()
+            .take(max_lag.min(autocorr.len()))
+            .skip(min_lag)
+        {
+            let bpm = 60.0 * frames_per_second / lag as f32;
 
-            if correlation > best_correlation {
-                best_correlation = correlation;
+            // Apply perceptual weighting to favor typical dance music tempos
+            let weighted_score = correlation * perceptual_weight(bpm);
+
+            if weighted_score > best_score {
+                best_score = weighted_score;
                 best_lag = lag;
+                best_raw_correlation = correlation;
             }
         }
 
@@ -275,20 +335,55 @@ impl BeatGridAnalyzer {
 
         let raw_bpm = 60.0 / seconds_per_beat;
 
-        // Octave disambiguation: check half and double BPM correlations
-        let final_bpm = self.disambiguate_octave(analysis, raw_bpm, frames_per_second);
+        // Octave disambiguation with perceptual weighting
+        let final_bpm = self.disambiguate_octave_weighted(&autocorr, raw_bpm, frames_per_second);
 
-        // Confidence is based on correlation strength
-        let confidence = best_correlation.clamp(0.0, 1.0);
+        // Normalize confidence based on autocorrelation strength
+        // The autocorrelation at lag 0 is the signal energy; normalize by it
+        let energy = autocorr.first().copied().unwrap_or(1.0).max(0.001);
+        let confidence = (best_raw_correlation / energy).clamp(0.0, 1.0);
 
         Some((final_bpm, confidence))
     }
 
+    /// Disambiguate between octave-related BPM values using perceptual weighting
+    ///
+    /// Tests candidates at half/double BPM with perceptual weighting to select
+    /// the most likely tempo for dance/electronic music.
+    fn disambiguate_octave_weighted(
+        &self,
+        autocorr: &[f32],
+        raw_bpm: f32,
+        frames_per_second: f32,
+    ) -> f32 {
+        let candidates = [raw_bpm / 2.0, raw_bpm, raw_bpm * 2.0];
+        let mut best = (raw_bpm, f32::MIN);
+
+        for &bpm in &candidates {
+            // Skip candidates outside DJ-friendly range
+            if !(60.0..=200.0).contains(&bpm) {
+                continue;
+            }
+
+            let lag = (frames_per_second * 60.0 / bpm) as usize;
+            if lag >= autocorr.len() || lag == 0 {
+                continue;
+            }
+
+            // Score = autocorrelation * perceptual weight
+            let score = autocorr[lag] * perceptual_weight(bpm);
+            if score > best.1 {
+                best = (bpm, score);
+            }
+        }
+
+        best.0
+    }
+
     /// Disambiguate between octave-related BPM values (e.g., 77 vs 154)
     ///
-    /// When we detect a BPM in the ambiguous range (65-95 BPM), we check if
-    /// double the BPM also has strong correlation. For dance/electronic music,
-    /// the higher tempo is usually correct.
+    /// Legacy method for cases where we don't have full autocorrelation.
+    #[allow(dead_code)]
     fn disambiguate_octave(&self, onset_fn: &[f32], raw_bpm: f32, frames_per_second: f32) -> f32 {
         // If BPM is very low, definitely double it
         if raw_bpm < 65.0 {

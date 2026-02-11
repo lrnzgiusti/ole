@@ -1,8 +1,8 @@
 //! Key detection using chromagram analysis
 //!
-//! Implements the Krumhansl-Schmuckler key-finding algorithm:
+//! Implements key-finding via chromagram correlation:
 //! 1. Compute chromagram (12-bin pitch class distribution) via STFT
-//! 2. Correlate with empirical major/minor key profiles
+//! 2. Correlate with Sha'ath (2011) key profiles optimized for electronic music
 //! 3. Return the best matching key with confidence score
 
 use crate::camelot::MusicalKey;
@@ -19,41 +19,42 @@ pub struct DetectedKey {
     pub confidence: f32,
 }
 
-/// Krumhansl-Schmuckler major key profile
+/// Sha'ath (2011) major key profile
 ///
-/// Empirically derived weights showing the relative prominence of each
-/// pitch class in major keys. Index 0 = tonic.
+/// Optimized for electronic/dance music detection (from libKeyFinder).
+/// Index 0 = tonic.
 const MAJOR_PROFILE: [f32; 12] = [
-    6.35, // Tonic (I)
-    2.23, // Minor 2nd
-    3.48, // Major 2nd
-    2.33, // Minor 3rd
-    4.38, // Major 3rd
-    4.09, // Perfect 4th
-    2.52, // Tritone
-    5.19, // Perfect 5th
-    2.39, // Minor 6th
-    3.66, // Major 6th
-    2.29, // Minor 7th
-    2.88, // Major 7th
+    6.6, // Tonic (I)
+    2.0, // Minor 2nd
+    3.5, // Major 2nd
+    2.3, // Minor 3rd
+    4.6, // Major 3rd
+    4.0, // Perfect 4th
+    2.5, // Tritone
+    5.2, // Perfect 5th
+    2.4, // Minor 6th
+    3.7, // Major 6th
+    2.3, // Minor 7th
+    3.4, // Major 7th
 ];
 
-/// Krumhansl-Schmuckler minor key profile
+/// Sha'ath (2011) minor key profile
 ///
-/// Empirically derived weights for minor keys. Index 0 = tonic.
+/// Optimized for electronic/dance music detection (from libKeyFinder).
+/// Index 0 = tonic.
 const MINOR_PROFILE: [f32; 12] = [
-    6.33, // Tonic (i)
-    2.68, // Minor 2nd
-    3.52, // Major 2nd
-    5.38, // Minor 3rd
-    2.60, // Major 3rd
-    3.53, // Perfect 4th
-    2.54, // Tritone
-    4.75, // Perfect 5th
-    3.98, // Minor 6th
-    2.69, // Major 6th
-    3.34, // Minor 7th
-    3.17, // Major 7th
+    6.5, // Tonic (i)
+    2.8, // Minor 2nd
+    3.5, // Major 2nd
+    5.4, // Minor 3rd
+    2.7, // Major 3rd
+    3.5, // Perfect 4th
+    2.5, // Tritone
+    5.2, // Perfect 5th
+    4.0, // Minor 6th
+    2.7, // Major 6th
+    4.3, // Minor 7th
+    3.2, // Major 7th
 ];
 
 /// Reference frequency for A4 (440 Hz)
@@ -68,8 +69,10 @@ pub struct KeyAnalyzer {
     window: Vec<f32>,
     /// Pre-computed bin-to-pitch-class mapping
     bin_to_pitch_class: Vec<Option<u8>>,
-    /// Pre-computed bin weights (for harmonic emphasis)
+    /// Pre-computed bin weights (includes harmonic emphasis AND octave decay)
     bin_weights: Vec<f32>,
+    /// Pre-allocated FFT buffer (reused per frame to avoid allocation)
+    fft_buffer: Vec<Complex<f32>>,
 }
 
 impl KeyAnalyzer {
@@ -88,9 +91,12 @@ impl KeyAnalyzer {
             .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / fft_size as f32).cos()))
             .collect();
 
-        // Pre-compute bin-to-pitch-class mapping
+        // Pre-compute bin-to-pitch-class mapping (includes octave decay in weights)
         let (bin_to_pitch_class, bin_weights) =
             Self::compute_pitch_class_mapping(fft_size, sample_rate);
+
+        // Pre-allocate FFT buffer
+        let fft_buffer = vec![Complex::new(0.0, 0.0); fft_size];
 
         Self {
             sample_rate,
@@ -100,6 +106,7 @@ impl KeyAnalyzer {
             window,
             bin_to_pitch_class,
             bin_weights,
+            fft_buffer,
         }
     }
 
@@ -107,6 +114,7 @@ impl KeyAnalyzer {
     ///
     /// Each bin is mapped to its closest pitch class (0-11, where 0=C).
     /// Returns the mapping and weights for each bin.
+    /// Weights include both harmonic emphasis (detune) AND octave decay (~6dB/octave above 500Hz).
     fn compute_pitch_class_mapping(
         fft_size: usize,
         sample_rate: u32,
@@ -118,9 +126,9 @@ impl KeyAnalyzer {
         let mut weights = Vec::with_capacity(fft_size / 2);
 
         // Musical range: ~27.5 Hz (A0) to ~4186 Hz (C8)
-        // We focus on 55 Hz to 2000 Hz for key detection
+        // We focus on 55 Hz to 4000 Hz to capture harmonics for better key detection
         let min_freq = 55.0; // A1
-        let max_freq = 2000.0; // Roughly B6
+        let max_freq = 4000.0; // Roughly B7
 
         for bin in 0..fft_size / 2 {
             let freq = bin_freq(bin);
@@ -141,10 +149,15 @@ impl KeyAnalyzer {
             // Bins closer to exact pitch frequencies get higher weight
             let exact_note = midi_note.round();
             let detune = (midi_note - exact_note).abs();
-            let weight = 1.0 - detune.min(0.5) * 2.0; // 1.0 at exact pitch, 0.0 at +/-0.5 semitone
+            let harmonic_weight = 1.0 - detune.min(0.5) * 2.0; // 1.0 at exact pitch, 0.0 at +/-0.5 semitone
 
+            // Pre-compute octave decay: ~6dB per octave above 500Hz
+            // This reduces contribution from higher harmonics (moved from analyze_frame)
+            let octave_decay = (500.0 / freq.max(500.0)).sqrt();
+
+            // Combine harmonic weight and octave decay into final weight
             mapping.push(Some(pitch_class));
-            weights.push(weight.max(0.0));
+            weights.push(harmonic_weight.max(0.0) * octave_decay);
         }
 
         (mapping, weights)
@@ -153,7 +166,7 @@ impl KeyAnalyzer {
     /// Analyze audio samples and detect the musical key
     ///
     /// Returns None if key detection fails (e.g., insufficient audio or low confidence).
-    pub fn analyze(&self, samples: &[f32]) -> Option<DetectedKey> {
+    pub fn analyze(&mut self, samples: &[f32]) -> Option<DetectedKey> {
         // Need at least a few seconds of audio
         if samples.len() < self.sample_rate as usize * 2 * 2 {
             // 2 seconds stereo
@@ -167,7 +180,7 @@ impl KeyAnalyzer {
         let (key, confidence) = self.match_key_profile(&chromagram);
 
         // Only return if confidence is reasonable
-        if confidence > 0.3 {
+        if confidence > 0.5 {
             Some(DetectedKey { key, confidence })
         } else {
             None
@@ -175,7 +188,7 @@ impl KeyAnalyzer {
     }
 
     /// Compute the chromagram (12-bin pitch class distribution)
-    fn compute_chromagram(&self, samples: &[f32]) -> [f32; 12] {
+    fn compute_chromagram(&mut self, samples: &[f32]) -> [f32; 12] {
         // Convert stereo to mono
         let mono: Vec<f32> = samples
             .chunks(2)
@@ -215,24 +228,26 @@ impl KeyAnalyzer {
     }
 
     /// Analyze a single frame and return its chromagram contribution
-    fn analyze_frame(&self, frame: &[f32]) -> [f32; 12] {
-        // Apply window and compute FFT
-        let mut buffer: Vec<Complex<f32>> = frame
-            .iter()
-            .zip(&self.window)
-            .map(|(s, w)| Complex::new(s * w, 0.0))
-            .collect();
+    fn analyze_frame(&mut self, frame: &[f32]) -> [f32; 12] {
+        // Apply window and fill pre-allocated FFT buffer (no allocation)
+        for (i, (s, w)) in frame.iter().zip(&self.window).enumerate() {
+            self.fft_buffer[i] = Complex::new(s * w, 0.0);
+        }
 
-        self.fft.process(&mut buffer);
+        self.fft.process(&mut self.fft_buffer);
 
         // Sum magnitudes into pitch classes
         let mut chroma = [0.0f32; 12];
 
-        for (bin, complex) in buffer[..self.fft_size / 2].iter().enumerate() {
+        for (bin, complex) in self.fft_buffer[..self.fft_size / 2].iter().enumerate() {
             if let Some(pitch_class) = self.bin_to_pitch_class[bin] {
-                let magnitude = complex.norm();
+                // Use norm_sqr() instead of norm() to avoid sqrt()
+                // Since we only care about relative magnitudes, squared magnitude works fine
+                let magnitude_sqr = complex.norm_sqr();
+                // Weight already includes octave decay (pre-computed in compute_pitch_class_mapping)
                 let weight = self.bin_weights[bin];
-                chroma[pitch_class as usize] += magnitude * weight;
+
+                chroma[pitch_class as usize] += magnitude_sqr * weight;
             }
         }
 

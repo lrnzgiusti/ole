@@ -67,6 +67,10 @@ pub struct ScanConfig {
     pub max_threads: usize,
     /// Whether to scan subdirectories recursively
     pub recursive: bool,
+    /// Force re-analysis (ignore cache)
+    pub force_reanalyze: bool,
+    /// Turbo mode: use all available cores (optimized for M4/Apple Silicon)
+    pub turbo_mode: bool,
 }
 
 impl Default for ScanConfig {
@@ -83,6 +87,42 @@ impl Default for ScanConfig {
             ],
             max_threads: 4,
             recursive: true,
+            force_reanalyze: false,
+            turbo_mode: false,
+        }
+    }
+}
+
+impl ScanConfig {
+    /// Create a turbo config optimized for M4/Apple Silicon
+    ///
+    /// Uses all available cores (2x for I/O bound work) and bypasses cache
+    /// for maximum parallel throughput.
+    pub fn turbo(directory: PathBuf) -> Self {
+        // Get available parallelism, default to 8 if detection fails
+        let cpus = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(8);
+
+        // M4 Pro has 10 P-cores + 4 E-cores = 14 cores
+        // M4 Max has 12 P-cores + 4 E-cores = 16 cores
+        // Use 2x cores since audio decoding is I/O bound
+        let turbo_threads = cpus * 2;
+
+        Self {
+            directory,
+            extensions: vec![
+                "mp3".into(),
+                "flac".into(),
+                "wav".into(),
+                "ogg".into(),
+                "m4a".into(),
+                "aac".into(),
+            ],
+            max_threads: turbo_threads,
+            recursive: true,
+            force_reanalyze: true,
+            turbo_mode: true,
         }
     }
 }
@@ -183,8 +223,13 @@ impl LibraryScanner {
             });
         }
 
-        // Partition into cached and uncached
-        let (cached_files, uncached_files) = self.partition_by_cache(&files);
+        // Partition into cached and uncached (or force all uncached in turbo mode)
+        let (cached_files, uncached_files) = if config.force_reanalyze {
+            // Turbo/rescan mode: bypass cache, analyze everything
+            (Vec::new(), files)
+        } else {
+            self.partition_by_cache(&files)
+        };
 
         // Report cached files
         for (i, (path, _)) in cached_files.iter().enumerate() {
@@ -266,6 +311,28 @@ impl LibraryScanner {
         });
 
         (rx, handle)
+    }
+
+    /// Start a turbo rescan - massive parallelism optimized for M4/Apple Silicon
+    ///
+    /// Uses all available cores (2x for I/O bound work), bypasses cache,
+    /// and re-analyzes all tracks with the improved BPM/key algorithms.
+    pub fn rescan_turbo(
+        &self,
+        directory: PathBuf,
+    ) -> (
+        Receiver<ScanProgress>,
+        JoinHandle<Result<ScanResult, ScanError>>,
+    ) {
+        let config = ScanConfig::turbo(directory);
+
+        // Log turbo mode activation
+        tracing::info!(
+            "TURBO RESCAN: {} threads, force reanalyze enabled",
+            config.max_threads
+        );
+
+        self.scan_async(config)
     }
 
     /// Collect all audio files from a directory
@@ -362,8 +429,6 @@ impl LibraryScanner {
 
             let handle = thread::spawn(move || {
                 let loader = TrackLoader::new();
-                let beat_analyzer = BeatGridAnalyzer::new(48000);
-                let key_analyzer = KeyAnalyzer::new(48000);
 
                 loop {
                     // Get next file to process
@@ -387,7 +452,7 @@ impl LibraryScanner {
                         });
                     }
 
-                    match analyze_track(&loader, &beat_analyzer, &key_analyzer, &path) {
+                    match analyze_track(&loader, &path) {
                         Ok(analysis) => {
                             // Store in cache
                             if let Ok(cache) = cache.lock() {
@@ -434,12 +499,7 @@ impl LibraryScanner {
 }
 
 /// Analyze a single track for BPM and key
-fn analyze_track(
-    loader: &TrackLoader,
-    beat_analyzer: &BeatGridAnalyzer,
-    key_analyzer: &KeyAnalyzer,
-    path: &Path,
-) -> Result<CachedAnalysis, ScanError> {
+fn analyze_track(loader: &TrackLoader, path: &Path) -> Result<CachedAnalysis, ScanError> {
     // Get file metadata
     let meta = std::fs::metadata(path)?;
     let file_size = meta.len();
@@ -451,6 +511,10 @@ fn analyze_track(
 
     // Load the track
     let track = loader.load(path)?;
+
+    // Create analyzers with actual track sample rate
+    let beat_analyzer = BeatGridAnalyzer::new(track.sample_rate);
+    let mut key_analyzer = KeyAnalyzer::new(track.sample_rate);
 
     // Analyze BPM (use first 30 seconds)
     let analysis_samples = track.samples.len().min(track.sample_rate as usize * 60); // 30 sec stereo
