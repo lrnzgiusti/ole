@@ -38,6 +38,8 @@ pub struct CachedAnalysis {
     pub title: String,
     /// Track artist
     pub artist: String,
+    /// Overall energy level (0.0–1.0), None if not yet analyzed
+    pub energy_level: Option<f32>,
 }
 
 /// Analysis cache backed by SQLite
@@ -76,6 +78,8 @@ impl AnalysisCache {
 
         let conn = Connection::open(db_path)?;
         conn.execute_batch(Self::SCHEMA)?;
+        // Migration: add energy_level column if missing
+        let _ = conn.execute_batch("ALTER TABLE tracks ADD COLUMN energy_level REAL");
         Ok(Self { conn })
     }
 
@@ -84,6 +88,7 @@ impl AnalysisCache {
     pub fn in_memory() -> Result<Self, CacheError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(Self::SCHEMA)?;
+        let _ = conn.execute_batch("ALTER TABLE tracks ADD COLUMN energy_level REAL");
         Ok(Self { conn })
     }
 
@@ -97,7 +102,7 @@ impl AnalysisCache {
         self.conn
             .query_row(
                 "SELECT path, file_size, modified_time, duration_secs, bpm, bpm_confidence,
-                        key, key_confidence, title, artist
+                        key, key_confidence, title, artist, energy_level
                  FROM tracks
                  WHERE path = ?1 AND file_size = ?2 AND modified_time = ?3",
                 params![path.to_string_lossy().to_string(), file_size, modified_time],
@@ -113,6 +118,7 @@ impl AnalysisCache {
                         key_confidence: row.get(7)?,
                         title: row.get(8)?,
                         artist: row.get(9)?,
+                        energy_level: row.get(10)?,
                     })
                 },
             )
@@ -132,8 +138,8 @@ impl AnalysisCache {
             r#"INSERT OR REPLACE INTO tracks
                (path, file_size, modified_time, duration_secs,
                 bpm, bpm_confidence, key, key_confidence,
-                title, artist, analyzed_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                title, artist, analyzed_at, energy_level)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"#,
             params![
                 analysis.path.to_string_lossy().to_string(),
                 analysis.file_size,
@@ -146,6 +152,7 @@ impl AnalysisCache {
                 analysis.title,
                 analysis.artist,
                 now,
+                analysis.energy_level,
             ],
         )?;
         Ok(())
@@ -155,7 +162,7 @@ impl AnalysisCache {
     pub fn get_all_sorted(&self) -> Result<Vec<CachedAnalysis>, CacheError> {
         let mut stmt = self.conn.prepare(
             "SELECT path, file_size, modified_time, duration_secs, bpm, bpm_confidence,
-                    key, key_confidence, title, artist
+                    key, key_confidence, title, artist, energy_level
              FROM tracks
              ORDER BY
                  CASE WHEN key IS NULL THEN 1 ELSE 0 END,  -- NULLs last
@@ -177,6 +184,7 @@ impl AnalysisCache {
                     key_confidence: row.get(7)?,
                     title: row.get(8)?,
                     artist: row.get(9)?,
+                    energy_level: row.get(10)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -189,7 +197,7 @@ impl AnalysisCache {
     pub fn get_by_key(&self, key: &str) -> Result<Vec<CachedAnalysis>, CacheError> {
         let mut stmt = self.conn.prepare(
             "SELECT path, file_size, modified_time, duration_secs, bpm, bpm_confidence,
-                    key, key_confidence, title, artist
+                    key, key_confidence, title, artist, energy_level
              FROM tracks
              WHERE key = ?1
              ORDER BY bpm ASC",
@@ -208,6 +216,7 @@ impl AnalysisCache {
                     key_confidence: row.get(7)?,
                     title: row.get(8)?,
                     artist: row.get(9)?,
+                    energy_level: row.get(10)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -256,6 +265,7 @@ mod tests {
             key_confidence: Some(0.87),
             title: "Test Track".to_string(),
             artist: "Test Artist".to_string(),
+            energy_level: Some(0.65),
         }
     }
 

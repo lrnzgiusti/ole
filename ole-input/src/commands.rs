@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 // Re-export types for use in commands
-pub use ole_audio::{DelayModulation, FilterMode, FilterType, MasteringPreset};
+pub use ole_audio::{
+    DelayMode, DelayModulation, EffectType, FilterMode, FilterType, GateDivision, MasteringPreset,
+};
 
 /// Input modes (vim-style)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -35,6 +37,41 @@ pub enum DeckId {
     B,
 }
 
+/// Energy direction preference for copilot scoring
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EnergyDirection {
+    #[default]
+    Maintain,
+    Build,
+    Drop,
+}
+
+impl EnergyDirection {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Maintain => Self::Build,
+            Self::Build => Self::Drop,
+            Self::Drop => Self::Maintain,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Maintain => "MAINTAIN",
+            Self::Build => "BUILD",
+            Self::Drop => "DROP",
+        }
+    }
+
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Maintain => "=",
+            Self::Build => "\u{25b2}",  // ▲
+            Self::Drop => "\u{25bc}",   // ▼
+        }
+    }
+}
+
 /// Navigation direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -42,17 +79,6 @@ pub enum Direction {
     Down,
     Left,
     Right,
-}
-
-/// Effect type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffectType {
-    Filter,
-    Delay,
-    Reverb,
-    TapeStop,
-    Flanger,
-    Bitcrusher,
 }
 
 /// Vinyl preset (1-5)
@@ -107,6 +133,7 @@ pub enum Command {
 
     // Effects (toggle/adjust)
     ToggleEffect(DeckId, EffectType),
+    AdjustEffectMix(DeckId, EffectType, f32), // delta: +0.1 or -0.1
     AdjustFilterCutoff(DeckId, f32),
 
     // Effect presets (level-based)
@@ -199,7 +226,88 @@ pub enum Command {
     // Bitcrusher effect
     ToggleBitcrusher(DeckId),
 
+    // Phaser effect
+    TogglePhaser(DeckId),
+
+    // Gate effect
+    ToggleGate(DeckId),
+
+    // Beat Repeat effect
+    ToggleBeatRepeat(DeckId),
+    TriggerBeatRepeat(DeckId),
+
+    // Ring Modulator effect
+    ToggleRingMod(DeckId),
+
+    // Shimmer Reverb effect
+    ToggleShimmer(DeckId),
+
+    // Wash Out effect
+    ToggleWashOut(DeckId),
+    SetWashAmount(DeckId, f32),
+
+    // Delay mode (Stereo/PingPong/Mono)
+    CycleDelayMode(DeckId),
+
     // Help navigation
     HelpScrollUp,
     HelpScrollDown,
+
+    // Looping
+    SetLoopIn(DeckId),
+    SetLoopOut(DeckId),
+    ToggleLoop(DeckId),
+    ClearLoop(DeckId),
+    AutoLoop(DeckId, f32),        // beats: 0.25, 0.5, 1, 2, 4, 8, 16
+    LoopHalve(DeckId),
+    LoopDouble(DeckId),
+    LoopRollStart(DeckId, f32),   // beats
+    LoopRollEnd(DeckId),
+
+    // 3-Band EQ per channel
+    AdjustEqLow(DeckId, f32),    // delta dB
+    AdjustEqMid(DeckId, f32),
+    AdjustEqHigh(DeckId, f32),
+    KillEqLow(DeckId),           // toggle kill switch
+    KillEqMid(DeckId),
+    KillEqHigh(DeckId),
+
+    // Quantize
+    ToggleQuantize(DeckId),
+    CycleQuantizeResolution(DeckId),
+
+    // Key Lock
+    ToggleKeyLock(DeckId),
+
+    // Slip Mode
+    ToggleSlip(DeckId),
+
+    // Sampler (Phase 5)
+    TriggerSampler(u8),        // Trigger slot 0-7 (0-indexed)
+    StopSampler(u8),           // Stop slot 0-7 (0-indexed)
+    LoadSamplerSlot(u8, PathBuf), // Load sample to slot
+    ClearSamplerSlot(u8),
+    ToggleSamplerLoop(u8),
+
+    // Recording (Phase 5)
+    ToggleRecording,           // Start/stop recording
+    SaveRecording(PathBuf),    // Save recording to file
+
+    // Effect Macros (Phase 5C)
+    TriggerMacro(DeckId, u8),  // Activate macro 1-4
+
+    // DJ Copilot
+    ToggleCopilot,                     // Toggle copilot scoring mode
+    CycleEnergyDirection,              // Cycle energy direction: Maintain → Build → Drop
+
+    // Library enhancements (Phase 4)
+    LibrarySearch(String),         // Set search query
+    LibrarySearchAppend(char),     // Append char to search (interactive typing)
+    LibrarySearchBackspace,        // Delete last search char
+    LibrarySearchClear,            // Clear search query
+    LibraryCycleSort,              // Cycle sort column
+    LibraryReverseSort,            // Toggle sort direction
+    LibraryShowHistory,            // Toggle history view
+    LibraryPageDown,               // Jump down ~10 tracks
+    LibraryPageUp,                 // Jump up ~10 tracks
 }

@@ -6,7 +6,7 @@
 use crate::cache::{AnalysisCache, CacheError, CachedAnalysis};
 use crate::loader::{LoadError, TrackLoader};
 use crossbeam_channel::{self, Receiver, Sender};
-use ole_analysis::{BeatGridAnalyzer, CamelotKey, KeyAnalyzer};
+use ole_analysis::{compute_energy_level, BeatGridAnalyzer, CamelotKey, KeyAnalyzer};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -532,6 +532,9 @@ fn analyze_track(loader: &TrackLoader, path: &Path) -> Result<CachedAnalysis, Sc
         })
         .unwrap_or((None, None));
 
+    // Compute overall energy level
+    let energy_level = Some(compute_energy_level(&track.samples));
+
     Ok(CachedAnalysis {
         path: path.to_path_buf(),
         file_size,
@@ -543,6 +546,7 @@ fn analyze_track(loader: &TrackLoader, path: &Path) -> Result<CachedAnalysis, Sc
         key_confidence,
         title: track.metadata.title,
         artist: track.metadata.artist,
+        energy_level,
     })
 }
 

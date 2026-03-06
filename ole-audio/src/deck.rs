@@ -1,7 +1,8 @@
 //! Deck implementation - track playback with pitch/tempo control
 
 use ole_analysis::{
-    BeatGrid, BeatGridAnalyzer, BpmDetector, EnhancedWaveform, SpectrumAnalyzer, SpectrumData,
+    BeatGrid, BeatGridAnalyzer, BpmDetector, EnhancedWaveform, PhraseMarker, SpectrumAnalyzer,
+    SpectrumData,
 };
 use std::sync::Arc;
 
@@ -48,6 +49,54 @@ pub struct BeatGridInfo {
 /// Size of scope buffer for oscilloscope display
 pub const SCOPE_SAMPLES_SIZE: usize = 512;
 
+/// Loop state for a deck
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoopState {
+    /// Loop start position in samples
+    pub loop_in: Option<f64>,
+    /// Loop end position in samples
+    pub loop_out: Option<f64>,
+    /// Whether the loop is currently active
+    pub active: bool,
+    /// Saved position for loop roll (returns here when loop roll ends)
+    pub roll_return_position: Option<f64>,
+}
+
+/// Quantize resolution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QuantizeResolution {
+    #[default]
+    OneBeat,
+    HalfBeat,
+    QuarterBeat,
+}
+
+impl QuantizeResolution {
+    pub fn beat_fraction(self) -> f64 {
+        match self {
+            Self::OneBeat => 1.0,
+            Self::HalfBeat => 0.5,
+            Self::QuarterBeat => 0.25,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OneBeat => "1",
+            Self::HalfBeat => "1/2",
+            Self::QuarterBeat => "1/4",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::OneBeat => Self::HalfBeat,
+            Self::HalfBeat => Self::QuarterBeat,
+            Self::QuarterBeat => Self::OneBeat,
+        }
+    }
+}
+
 /// Complete deck state for UI rendering
 #[derive(Debug, Clone)]
 pub struct DeckState {
@@ -71,6 +120,21 @@ pub struct DeckState {
     pub cue_points: [Option<f64>; 8],     // cue point positions in seconds (1-8)
     /// Recent audio samples for oscilloscope display (stereo interleaved: [L, R, L, R, ...])
     pub scope_samples: Box<[f32; SCOPE_SAMPLES_SIZE * 2]>,
+    // Loop state
+    pub loop_in: Option<f64>,   // loop start in seconds
+    pub loop_out: Option<f64>,  // loop end in seconds
+    pub loop_active: bool,
+    // Quantize
+    pub quantize_enabled: bool,
+    pub quantize_resolution: QuantizeResolution,
+    // Key lock
+    pub key_lock: bool,
+    // Slip mode
+    pub slip_enabled: bool,
+    pub slip_position: Option<f64>, // shadow position in seconds (None = not slipping)
+    // Phrase intelligence
+    pub energy_curve: Arc<Vec<f32>>,
+    pub phrase_markers: Arc<Vec<PhraseMarker>>,
 }
 
 impl Default for DeckState {
@@ -95,6 +159,16 @@ impl Default for DeckState {
             is_clipping: false,
             cue_points: [None; 8],
             scope_samples: Box::new([0.0; SCOPE_SAMPLES_SIZE * 2]),
+            loop_in: None,
+            loop_out: None,
+            loop_active: false,
+            quantize_enabled: false,
+            quantize_resolution: QuantizeResolution::default(),
+            key_lock: false,
+            slip_enabled: false,
+            slip_position: None,
+            energy_curve: Arc::new(Vec::new()),
+            phrase_markers: Arc::new(Vec::new()),
         }
     }
 }
@@ -160,6 +234,21 @@ pub struct Deck {
     pending_state: Option<PlaybackState>,
     /// Smoothed gain for click-free volume changes
     smoothed_gain: f32,
+    /// Loop state
+    loop_state: LoopState,
+    /// Quantize mode
+    quantize_enabled: bool,
+    quantize_resolution: QuantizeResolution,
+    /// Key lock (pitch-independent tempo)
+    key_lock: bool,
+    /// Slip mode: shadow position continues advancing during loops/cue jumps
+    slip_enabled: bool,
+    /// Shadow position in samples (where playback would be without slip actions)
+    slip_position: Option<f64>,
+    /// Energy curve for phrase visualization
+    energy_curve: Arc<Vec<f32>>,
+    /// Phrase boundary markers
+    phrase_markers: Arc<Vec<PhraseMarker>>,
 }
 
 impl Deck {
@@ -222,6 +311,19 @@ impl Deck {
             pending_state: None,
             // Smoothed gain starts at target
             smoothed_gain: 1.0,
+            // Loop state
+            loop_state: LoopState::default(),
+            // Quantize
+            quantize_enabled: false,
+            quantize_resolution: QuantizeResolution::default(),
+            // Key lock
+            key_lock: false,
+            // Slip mode
+            slip_enabled: false,
+            slip_position: None,
+            // Phrase data
+            energy_curve: Arc::new(Vec::new()),
+            phrase_markers: Arc::new(Vec::new()),
         }
     }
 
@@ -248,6 +350,8 @@ impl Deck {
         self.bpm_detector = BpmDetector::new(sample_rate);
         self.waveform_overview = waveform;
         self.enhanced_waveform = enhanced_waveform;
+        self.loop_state = LoopState::default();
+        self.slip_position = None;
 
         // Analyze beat grid from first 30 seconds of audio
         if !self.samples.is_empty() {
@@ -387,19 +491,23 @@ impl Deck {
         }
     }
 
-    /// Set cue point at current position (1-4)
+    /// Set cue point at current position (1-8)
     pub fn set_cue(&mut self, cue_num: u8) {
-        if (1..=4).contains(&cue_num) {
-            self.cue_points[(cue_num - 1) as usize] = Some(self.position);
+        if (1..=8).contains(&cue_num) {
+            let pos = self.maybe_quantize_position(self.position);
+            self.cue_points[(cue_num - 1) as usize] = Some(pos);
         }
     }
 
-    /// Jump to cue point (1-4)
+    /// Jump to cue point (1-8)
     pub fn jump_cue(&mut self, cue_num: u8) {
-        if (1..=4).contains(&cue_num) {
+        if (1..=8).contains(&cue_num) {
             if let Some(pos) = self.cue_points[(cue_num - 1) as usize] {
+                // Save slip position before jumping
+                if self.slip_enabled && self.slip_position.is_none() {
+                    self.slip_position = Some(self.position);
+                }
                 self.position = pos;
-                // Trigger fade-in to prevent click
                 self.fade_in_samples = Self::FADE_IN_SAMPLES;
             }
         }
@@ -407,11 +515,201 @@ impl Deck {
 
     /// Get cue point position (for UI display)
     pub fn get_cue(&self, cue_num: u8) -> Option<f64> {
-        if (1..=4).contains(&cue_num) {
+        if (1..=8).contains(&cue_num) {
             self.cue_points[(cue_num - 1) as usize]
         } else {
             None
         }
+    }
+
+    // --- Loop methods ---
+
+    /// Set loop-in point at current position
+    pub fn set_loop_in(&mut self) {
+        let pos = self.maybe_quantize_position(self.position);
+        self.loop_state.loop_in = Some(pos);
+    }
+
+    /// Set loop-out point at current position and activate loop
+    pub fn set_loop_out(&mut self) {
+        let pos = self.maybe_quantize_position(self.position);
+        self.loop_state.loop_out = Some(pos);
+        // Auto-activate loop if both points are set
+        if self.loop_state.loop_in.is_some() {
+            self.loop_state.active = true;
+        }
+    }
+
+    /// Toggle loop on/off
+    pub fn toggle_loop(&mut self) {
+        if self.loop_state.loop_in.is_some() && self.loop_state.loop_out.is_some() {
+            self.loop_state.active = !self.loop_state.active;
+        }
+    }
+
+    /// Clear the loop
+    pub fn clear_loop(&mut self) {
+        self.loop_state.active = false;
+        self.loop_state.loop_in = None;
+        self.loop_state.loop_out = None;
+    }
+
+    /// Create an auto-loop of the given number of beats at the current position
+    pub fn auto_loop(&mut self, beats: f32) {
+        let samples_per_beat = self.samples_per_beat();
+        if samples_per_beat <= 0.0 {
+            return;
+        }
+        let loop_in = self.maybe_quantize_position(self.position);
+        let loop_length = beats as f64 * samples_per_beat;
+        let loop_out = (loop_in + loop_length).min(self.samples.len() as f64);
+        self.loop_state.loop_in = Some(loop_in);
+        self.loop_state.loop_out = Some(loop_out);
+        self.loop_state.active = true;
+    }
+
+    /// Halve the loop length (keep loop_in, move loop_out to midpoint)
+    pub fn loop_halve(&mut self) {
+        if let (Some(loop_in), Some(loop_out)) = (self.loop_state.loop_in, self.loop_state.loop_out) {
+            let length = loop_out - loop_in;
+            if length > 256.0 { // Minimum loop size ~5ms at 48kHz
+                self.loop_state.loop_out = Some(loop_in + length / 2.0);
+            }
+        }
+    }
+
+    /// Double the loop length (keep loop_in, extend loop_out)
+    pub fn loop_double(&mut self) {
+        if let (Some(loop_in), Some(loop_out)) = (self.loop_state.loop_in, self.loop_state.loop_out) {
+            let length = loop_out - loop_in;
+            let new_out = (loop_in + length * 2.0).min(self.samples.len() as f64);
+            self.loop_state.loop_out = Some(new_out);
+        }
+    }
+
+    /// Start a loop roll: auto-loop N beats but remember the original position
+    pub fn start_loop_roll(&mut self, beats: f32) {
+        // Save current position for return
+        self.loop_state.roll_return_position = Some(self.position);
+        self.auto_loop(beats);
+    }
+
+    /// End a loop roll: deactivate loop and return to the shadow position
+    pub fn end_loop_roll(&mut self) {
+        if let Some(return_pos) = self.loop_state.roll_return_position.take() {
+            self.loop_state.active = false;
+            // Calculate where playback would have been
+            self.position = return_pos;
+            self.fade_in_samples = Self::FADE_IN_SAMPLES;
+        } else {
+            self.loop_state.active = false;
+        }
+    }
+
+    /// Get samples per beat (using beat grid or BPM fallback)
+    fn samples_per_beat(&self) -> f64 {
+        if let Some(grid) = &self.beat_grid {
+            grid.samples_per_beat_at_tempo(self.tempo)
+        } else if let Some(bpm) = self.bpm {
+            let beats_per_sec = bpm as f64 * self.tempo as f64 / 60.0;
+            if beats_per_sec > 0.0 {
+                (self.sample_rate as f64 * 2.0) / beats_per_sec
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    }
+
+    // --- Quantize methods ---
+
+    /// Enable/disable quantize mode
+    pub fn set_quantize(&mut self, enabled: bool) {
+        self.quantize_enabled = enabled;
+    }
+
+    /// Toggle quantize mode
+    pub fn toggle_quantize(&mut self) {
+        self.quantize_enabled = !self.quantize_enabled;
+    }
+
+    /// Set quantize resolution
+    pub fn set_quantize_resolution(&mut self, resolution: QuantizeResolution) {
+        self.quantize_resolution = resolution;
+    }
+
+    /// Cycle quantize resolution
+    pub fn cycle_quantize_resolution(&mut self) {
+        self.quantize_resolution = self.quantize_resolution.next();
+    }
+
+    /// Snap a position to the nearest beat grid point if quantize is enabled
+    fn maybe_quantize_position(&self, pos: f64) -> f64 {
+        if !self.quantize_enabled {
+            return pos;
+        }
+        self.snap_to_grid(pos)
+    }
+
+    /// Snap a sample position to the nearest beat grid line
+    fn snap_to_grid(&self, pos: f64) -> f64 {
+        let spb = self.samples_per_beat();
+        if spb <= 0.0 {
+            return pos;
+        }
+        let resolution_samples = spb * self.quantize_resolution.beat_fraction();
+        let grid_offset = self.beat_grid.as_ref().map(|g| g.first_beat_offset as f64).unwrap_or(0.0);
+        let relative = pos - grid_offset;
+        let beats = (relative / resolution_samples).round();
+        (grid_offset + beats * resolution_samples).clamp(0.0, self.samples.len() as f64)
+    }
+
+    // --- Key lock methods ---
+
+    /// Set key lock
+    pub fn set_key_lock(&mut self, enabled: bool) {
+        self.key_lock = enabled;
+    }
+
+    /// Toggle key lock
+    pub fn toggle_key_lock(&mut self) {
+        self.key_lock = !self.key_lock;
+    }
+
+    /// Get key lock state
+    pub fn is_key_locked(&self) -> bool {
+        self.key_lock
+    }
+
+    // --- Slip mode methods ---
+
+    /// Set slip mode
+    pub fn set_slip(&mut self, enabled: bool) {
+        self.slip_enabled = enabled;
+        if !enabled {
+            // Jump to shadow position if we have one
+            if let Some(shadow_pos) = self.slip_position.take() {
+                self.position = shadow_pos;
+                self.fade_in_samples = Self::FADE_IN_SAMPLES;
+            }
+        }
+    }
+
+    /// Set phrase intelligence data (energy curve + phrase markers)
+    pub fn set_phrase_data(
+        &mut self,
+        energy_curve: Arc<Vec<f32>>,
+        phrase_markers: Arc<Vec<PhraseMarker>>,
+    ) {
+        self.energy_curve = energy_curve;
+        self.phrase_markers = phrase_markers;
+    }
+
+    /// Toggle slip mode
+    pub fn toggle_slip(&mut self) {
+        let new_state = !self.slip_enabled;
+        self.set_slip(new_state);
     }
 
     /// Set tempo (playback speed)
@@ -566,6 +864,11 @@ impl Deck {
             scope_samples[i] = self.scope_buffer[src_idx];
         }
 
+        // Convert loop positions from samples to seconds
+        let loop_in_secs = self.loop_state.loop_in.map(|pos| pos / sample_rate_stereo);
+        let loop_out_secs = self.loop_state.loop_out.map(|pos| pos / sample_rate_stereo);
+        let slip_pos_secs = self.slip_position.map(|pos| pos / sample_rate_stereo);
+
         DeckState {
             playback: self.state,
             position: self.position_secs(),
@@ -586,6 +889,16 @@ impl Deck {
             is_clipping: self.is_clipping,
             cue_points,
             scope_samples,
+            loop_in: loop_in_secs,
+            loop_out: loop_out_secs,
+            loop_active: self.loop_state.active,
+            quantize_enabled: self.quantize_enabled,
+            quantize_resolution: self.quantize_resolution,
+            key_lock: self.key_lock,
+            slip_enabled: self.slip_enabled,
+            slip_position: slip_pos_secs,
+            energy_curve: self.energy_curve.clone(),
+            phrase_markers: self.phrase_markers.clone(),
         }
     }
 
@@ -688,6 +1001,22 @@ impl Deck {
 
             // Advance position based on tempo
             self.position += 2.0 * self.tempo as f64;
+
+            // Update slip shadow position (advances regardless of loops)
+            if self.slip_enabled {
+                if let Some(ref mut shadow) = self.slip_position {
+                    *shadow += 2.0 * self.tempo as f64;
+                }
+            }
+
+            // Loop boundary: wrap position back to loop_in when reaching loop_out
+            if self.loop_state.active {
+                if let (Some(loop_in), Some(loop_out)) = (self.loop_state.loop_in, self.loop_state.loop_out) {
+                    if loop_out > loop_in && self.position >= loop_out {
+                        self.position = loop_in + (self.position - loop_out) % (loop_out - loop_in);
+                    }
+                }
+            }
         }
 
         // Update spectrum

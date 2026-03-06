@@ -3,7 +3,7 @@ use egui::{Frame, Ui};
 use ole_input::{Command, DeckId};
 use crate::state::{FocusedPane, GuiState};
 use crate::theme;
-use super::waveform::draw_waveform;
+use super::waveform::{draw_waveform, draw_overview};
 use super::vu_meter::draw_vu_meter;
 use super::transport::draw_transport;
 
@@ -57,12 +57,35 @@ impl DeckPanel {
                                 .monospace(),
                         );
                     }
+
+                    // Phrase countdown indicator
+                    if let Some((phrase_type, bars)) = state.next_phrase(is_deck_a) {
+                        let bars_int = bars.ceil() as u32;
+                        let label = phrase_type.label();
+                        let (text, color) = if bars_int <= 2 {
+                            (format!("!{}>{}",  bars_int, label), theme::ACCENT_PINK)
+                        } else {
+                            (format!("{}>{}",  bars_int, label), theme::TEXT_DIM)
+                        };
+                        ui.label(
+                            egui::RichText::new(text)
+                                .color(color)
+                                .monospace(),
+                        );
+                    }
                 });
 
-                // Waveform (click-to-seek)
+                // Mini overview waveform (click to seek)
+                let deck_id = if is_deck_a { DeckId::A } else { DeckId::B };
+                if let Some(seek_frac) = draw_overview(ui, state, is_deck_a) {
+                    let d = if is_deck_a { &state.deck_a } else { &state.deck_b };
+                    let seek_secs = seek_frac * d.duration;
+                    command = Some(Command::Seek(deck_id, seek_secs));
+                }
+
+                // Main waveform (click-to-seek)
                 if let Some(seek_frac) = draw_waveform(ui, state, is_deck_a) {
-                    let deck = if is_deck_a { DeckId::A } else { DeckId::B };
-                    command = Some(Command::Seek(deck, seek_frac));
+                    command = Some(Command::Seek(deck_id, seek_frac));
                 }
 
                 // Transport + VU meter row
@@ -86,7 +109,7 @@ impl DeckPanel {
                     });
                 });
 
-                // Tempo + Gain
+                // Tempo + Gain + EQ indicators
                 ui.horizontal(|ui| {
                     let d = if is_deck_a { &state.deck_a } else { &state.deck_b };
                     let tempo_pct = (d.tempo - 1.0) * 100.0;
@@ -101,6 +124,32 @@ impl DeckPanel {
                             .color(theme::TEXT)
                             .monospace(),
                     );
+
+                    // EQ indicators
+                    let (lo, mid, hi) = if is_deck_a {
+                        (state.eq_a_low, state.eq_a_mid, state.eq_a_high)
+                    } else {
+                        (state.eq_b_low, state.eq_b_mid, state.eq_b_high)
+                    };
+                    let (lo_k, mid_k, hi_k) = if is_deck_a {
+                        (state.eq_a_low_kill, state.eq_a_mid_kill, state.eq_a_high_kill)
+                    } else {
+                        (state.eq_b_low_kill, state.eq_b_mid_kill, state.eq_b_high_kill)
+                    };
+                    let eq_changed = lo.abs() > 0.01 || mid.abs() > 0.01 || hi.abs() > 0.01
+                        || lo_k || mid_k || hi_k;
+                    if eq_changed {
+                        let lo_str = if lo_k { "X".to_string() } else { format!("{:.0}dB", lo) };
+                        let mid_str = if mid_k { "X".to_string() } else { format!("{:.0}dB", mid) };
+                        let hi_str = if hi_k { "X".to_string() } else { format!("{:.0}dB", hi) };
+                        let eq_text = format!("EQ L:{} M:{} H:{}", lo_str, mid_str, hi_str);
+                        ui.label(
+                            egui::RichText::new(eq_text)
+                                .color(theme::ACCENT_CYAN)
+                                .monospace()
+                                .size(10.0),
+                        );
+                    }
                 });
             });
 

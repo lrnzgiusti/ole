@@ -110,6 +110,10 @@ pub struct Reverb {
 
     enabled: bool,
 
+    // Sidechain ducking
+    duck_sensitivity: f32,
+    duck_envelope: f32,
+
     // Cached computed values (updated on parameter change to avoid per-sample calculation)
     cached_feedback: f32,
     cached_wet1: f32,
@@ -158,6 +162,8 @@ impl Reverb {
             width,
             level: 0,
             enabled: false,
+            duck_sensitivity: 0.0,
+            duck_envelope: 0.0,
             // Pre-compute cached values
             cached_feedback: room_size * 0.24 + 0.6,
             cached_wet1: wet * (width * 0.5 + 0.5),
@@ -259,6 +265,16 @@ impl Reverb {
         self.level
     }
 
+    /// Set sidechain duck sensitivity (0.0 = off, 1.0 = full ducking)
+    pub fn set_duck_sensitivity(&mut self, sensitivity: f32) {
+        self.duck_sensitivity = sensitivity.clamp(0.0, 1.0);
+    }
+
+    /// Get duck sensitivity
+    pub fn duck_sensitivity(&self) -> f32 {
+        self.duck_sensitivity
+    }
+
     /// Process a stereo sample pair
     fn process_sample(&mut self, left: f32, right: f32) -> (f32, f32) {
         // Attenuate input to prevent buildup
@@ -334,15 +350,28 @@ impl Effect for Reverb {
                 self.wet_current = Self::WET_SMOOTH_COEFF * self.wet_current
                     + (1.0 - Self::WET_SMOOTH_COEFF) * self.wet_target;
 
+                // Sidechain ducking: envelope follower on dry signal
+                let duck_amount = if self.duck_sensitivity > 0.0 {
+                    let dry_level = (chunk[0].abs() + chunk[1].abs()) * 0.5;
+                    if dry_level > self.duck_envelope {
+                        self.duck_envelope = self.duck_envelope * 0.01 + dry_level * 0.99;
+                    } else {
+                        self.duck_envelope *= 0.9995;
+                    }
+                    1.0 - (self.duck_envelope * self.duck_sensitivity).min(1.0)
+                } else {
+                    1.0
+                };
+
                 // Process through reverb
                 let (wet_l, wet_r) = self.process_sample(chunk[0], chunk[1]);
 
-                // Crossfade between dry and wet based on envelope
-                // process_sample already mixes dry/wet, so we interpolate the full output
+                // Crossfade between dry and wet based on envelope, apply ducking
                 let dry_l = chunk[0];
                 let dry_r = chunk[1];
-                chunk[0] = dry_l * (1.0 - self.wet_current) + wet_l * self.wet_current;
-                chunk[1] = dry_r * (1.0 - self.wet_current) + wet_r * self.wet_current;
+                let wet_env = self.wet_current * duck_amount;
+                chunk[0] = dry_l * (1.0 - self.wet_current) + wet_l * wet_env;
+                chunk[1] = dry_r * (1.0 - self.wet_current) + wet_r * wet_env;
             }
         }
     }
@@ -360,6 +389,7 @@ impl Effect for Reverb {
         for allpass in &mut self.allpass_r {
             allpass.reset();
         }
+        self.duck_envelope = 0.0;
     }
 
     fn is_enabled(&self) -> bool {

@@ -2,22 +2,25 @@
 
 use crate::deck::{Deck, DeckState};
 use crate::effects::{
-    Bitcrusher, Delay, DelayModulation, Effect, Filter, FilterMode, FilterType, Flanger,
-    LadderFilter, Limiter, Reverb, StateVariableFilter, SvfOutputType, TapeStop,
+    BeatRepeat, Bitcrusher, ChannelEq, Delay, DelayMode, DelayModulation, Effect, EffectType,
+    Filter, FilterMode, FilterType, Flanger, Gate, GateDivision, LadderFilter, Limiter, Phaser,
+    Reverb, RingModulator, ShimmerReverb, StateVariableFilter, SvfOutputType, TapeStop, WashOut,
 };
 use crate::mastering::{LufsValues, MasteringChain, MasteringPreset};
 use crate::mixer::Mixer;
+use crate::recording::RecordingState;
+use crate::sampler::Sampler;
 use crate::timestretcher::{FftSize, PhaseVocoder};
 use crate::vinyl::{VinylEmulator, VinylPreset};
 use crossbeam_channel::{bounded, Receiver, Sender};
-use ole_analysis::EnhancedWaveform;
+use ole_analysis::{EnhancedWaveform, PhraseMarker};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Commands sent to the audio engine
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
-    // Deck commands (samples, sample_rate, name, waveform_overview, enhanced_waveform, key)
+    // Deck commands (samples, sample_rate, name, waveform_overview, enhanced_waveform, key, energy_curve, phrase_markers)
     // Using Arc to avoid copying large sample data through channels
     LoadDeckA(
         Arc<Vec<f32>>,
@@ -26,6 +29,8 @@ pub enum AudioCommand {
         Arc<Vec<f32>>,
         Arc<EnhancedWaveform>,
         Option<String>,
+        Arc<Vec<f32>>,
+        Arc<Vec<PhraseMarker>>,
     ),
     LoadDeckB(
         Arc<Vec<f32>>,
@@ -34,6 +39,8 @@ pub enum AudioCommand {
         Arc<Vec<f32>>,
         Arc<EnhancedWaveform>,
         Option<String>,
+        Arc<Vec<f32>>,
+        Arc<Vec<PhraseMarker>>,
     ),
     PlayA,
     PlayB,
@@ -165,6 +172,106 @@ pub enum AudioCommand {
     SetBitcrusherDownsampleA(u8),
     SetBitcrusherDownsampleB(u8),
 
+    // Phaser effect
+    TogglePhaserA,
+    TogglePhaserB,
+
+    // Gate effect
+    ToggleGateA,
+    ToggleGateB,
+    SetGateDivisionA(GateDivision),
+    SetGateDivisionB(GateDivision),
+
+    // Beat Repeat effect
+    ToggleBeatRepeatA,
+    ToggleBeatRepeatB,
+    TriggerBeatRepeatA,
+    TriggerBeatRepeatB,
+
+    // Ring Modulator effect
+    ToggleRingModA,
+    ToggleRingModB,
+
+    // Shimmer Reverb effect
+    ToggleShimmerA,
+    ToggleShimmerB,
+
+    // Wash Out effect
+    ToggleWashOutA,
+    ToggleWashOutB,
+    SetWashAmountA(f32),
+    SetWashAmountB(f32),
+
+    // Generic effect mix (dry/wet)
+    SetEffectMixA(EffectType, f32),
+    SetEffectMixB(EffectType, f32),
+
+    // Delay mode (Stereo/PingPong/Mono)
+    SetDelayModeA(DelayMode),
+    SetDelayModeB(DelayMode),
+    CycleDelayModeA,
+    CycleDelayModeB,
+
+    // Looping
+    SetLoopInA,
+    SetLoopInB,
+    SetLoopOutA,
+    SetLoopOutB,
+    ToggleLoopA,
+    ToggleLoopB,
+    ClearLoopA,
+    ClearLoopB,
+    AutoLoopA(f32), // beats
+    AutoLoopB(f32),
+    LoopHalveA,
+    LoopHalveB,
+    LoopDoubleA,
+    LoopDoubleB,
+    LoopRollStartA(f32),
+    LoopRollStartB(f32),
+    LoopRollEndA,
+    LoopRollEndB,
+
+    // 3-Band Channel EQ
+    AdjustEqLowA(f32),
+    AdjustEqLowB(f32),
+    AdjustEqMidA(f32),
+    AdjustEqMidB(f32),
+    AdjustEqHighA(f32),
+    AdjustEqHighB(f32),
+    KillEqLowA,
+    KillEqLowB,
+    KillEqMidA,
+    KillEqMidB,
+    KillEqHighA,
+    KillEqHighB,
+
+    // Quantize
+    ToggleQuantizeA,
+    ToggleQuantizeB,
+    CycleQuantizeResolutionA,
+    CycleQuantizeResolutionB,
+
+    // Key Lock
+    ToggleKeyLockA,
+    ToggleKeyLockB,
+
+    // Slip Mode
+    ToggleSlipA,
+    ToggleSlipB,
+
+    // Sampler
+    LoadSamplerSlot(u8, Arc<Vec<f32>>, u32, Option<String>),
+    ClearSamplerSlot(u8),
+    TriggerSampler(u8),
+    StopSampler(u8),
+    SetSamplerGain(u8, f32),
+    SetSamplerLoop(u8, bool),
+
+    // Recording
+    StartRecording,
+    StopRecording,
+
     // System
     Shutdown,
 }
@@ -216,6 +323,66 @@ pub enum AudioEvent {
         mastering_preset: MasteringPreset,
         mastering_lufs: LufsValues,
         mastering_gain_reduction: f32,
+        // New effects state
+        flanger_a_enabled: bool,
+        flanger_b_enabled: bool,
+        bitcrusher_a_enabled: bool,
+        bitcrusher_b_enabled: bool,
+        tape_stop_a_enabled: bool,
+        tape_stop_b_enabled: bool,
+        phaser_a_enabled: bool,
+        phaser_b_enabled: bool,
+        gate_a_enabled: bool,
+        gate_b_enabled: bool,
+        beat_repeat_a_enabled: bool,
+        beat_repeat_b_enabled: bool,
+        ringmod_a_enabled: bool,
+        ringmod_b_enabled: bool,
+        shimmer_a_enabled: bool,
+        shimmer_b_enabled: bool,
+        washout_a_enabled: bool,
+        washout_b_enabled: bool,
+        washout_a_amount: f32,
+        washout_b_amount: f32,
+        delay_a_mode: DelayMode,
+        delay_b_mode: DelayMode,
+        // Effect mix levels (dry/wet 0.0-1.0)
+        flanger_a_mix: f32,
+        flanger_b_mix: f32,
+        phaser_a_mix: f32,
+        phaser_b_mix: f32,
+        bitcrusher_a_mix: f32,
+        bitcrusher_b_mix: f32,
+        gate_a_mix: f32,
+        gate_b_mix: f32,
+        beat_repeat_a_mix: f32,
+        beat_repeat_b_mix: f32,
+        ringmod_a_mix: f32,
+        ringmod_b_mix: f32,
+        shimmer_a_mix: f32,
+        shimmer_b_mix: f32,
+        delay_a_mix: f32,
+        delay_b_mix: f32,
+        reverb_a_mix: f32,
+        reverb_b_mix: f32,
+        // Channel EQ state
+        eq_a_low: f32,
+        eq_a_mid: f32,
+        eq_a_high: f32,
+        eq_a_low_kill: bool,
+        eq_a_mid_kill: bool,
+        eq_a_high_kill: bool,
+        eq_b_low: f32,
+        eq_b_mid: f32,
+        eq_b_high: f32,
+        eq_b_low_kill: bool,
+        eq_b_mid_kill: bool,
+        eq_b_high_kill: bool,
+        // Sampler state: (loaded, playing, loop_enabled, name) per slot
+        sampler_slots: [(bool, bool, bool, Option<String>); 8],
+        // Recording state
+        is_recording: bool,
+        recording_duration: f64,
     },
     /// Track loaded successfully
     TrackLoaded { deck: char },
@@ -225,7 +392,7 @@ pub enum AudioEvent {
 
 /// Maximum buffer size for pre-allocated processing buffers
 /// Sized for 2048 stereo samples (typical maximum)
-const MAX_BUFFER_SIZE: usize = 4096;
+const MAX_BUFFER_SIZE: usize = 8192;
 
 /// Audio engine state (held in audio thread)
 pub struct EngineState {
@@ -265,6 +432,27 @@ pub struct EngineState {
     // Bitcrusher effect
     pub bitcrusher_a: Bitcrusher,
     pub bitcrusher_b: Bitcrusher,
+    // Phaser effect
+    pub phaser_a: Phaser,
+    pub phaser_b: Phaser,
+    // Gate effect
+    pub gate_a: Gate,
+    pub gate_b: Gate,
+    // Beat Repeat effect
+    pub beat_repeat_a: BeatRepeat,
+    pub beat_repeat_b: BeatRepeat,
+    // Ring Modulator effect
+    pub ringmod_a: RingModulator,
+    pub ringmod_b: RingModulator,
+    // Shimmer Reverb effect
+    pub shimmer_a: ShimmerReverb,
+    pub shimmer_b: ShimmerReverb,
+    // Wash Out effect
+    pub washout_a: WashOut,
+    pub washout_b: WashOut,
+    // Channel EQ (3-band per deck)
+    pub eq_a: ChannelEq,
+    pub eq_b: ChannelEq,
     sample_rate: u32,
     // Current effect levels (0 = off, 1-5 for delay/reverb, 1-10 for filter)
     filter_a_level: u8,
@@ -279,6 +467,10 @@ pub struct EngineState {
     // Pre-allocated processing buffers (avoids allocation in audio callback)
     buffer_a: Vec<f32>,
     buffer_b: Vec<f32>,
+    // Sampler (8 one-shot/loop slots)
+    pub sampler: Sampler,
+    // Recording (master output capture)
+    pub recording: RecordingState,
 }
 
 impl EngineState {
@@ -320,6 +512,27 @@ impl EngineState {
             // Bitcrusher effects
             bitcrusher_a: Bitcrusher::new(sample_rate as f32),
             bitcrusher_b: Bitcrusher::new(sample_rate as f32),
+            // Phaser effects
+            phaser_a: Phaser::new(sample_rate as f32),
+            phaser_b: Phaser::new(sample_rate as f32),
+            // Gate effects
+            gate_a: Gate::new(sample_rate as f32),
+            gate_b: Gate::new(sample_rate as f32),
+            // Beat Repeat effects
+            beat_repeat_a: BeatRepeat::new(sample_rate as f32),
+            beat_repeat_b: BeatRepeat::new(sample_rate as f32),
+            // Ring Modulator effects
+            ringmod_a: RingModulator::new(sample_rate as f32),
+            ringmod_b: RingModulator::new(sample_rate as f32),
+            // Shimmer Reverb effects
+            shimmer_a: ShimmerReverb::new(sample_rate as f32),
+            shimmer_b: ShimmerReverb::new(sample_rate as f32),
+            // Wash Out effects
+            washout_a: WashOut::new(sample_rate as f32),
+            washout_b: WashOut::new(sample_rate as f32),
+            // Channel EQ (3-band per deck)
+            eq_a: ChannelEq::new(sample_rate as f32),
+            eq_b: ChannelEq::new(sample_rate as f32),
             sample_rate,
             filter_a_level: 0,
             filter_b_level: 0,
@@ -332,6 +545,10 @@ impl EngineState {
             // Pre-allocate buffers to avoid allocation in audio callback
             buffer_a: vec![0.0f32; MAX_BUFFER_SIZE],
             buffer_b: vec![0.0f32; MAX_BUFFER_SIZE],
+            // Sampler
+            sampler: Sampler::new(sample_rate),
+            // Recording
+            recording: RecordingState::new(sample_rate),
         }
     }
 
@@ -369,12 +586,16 @@ impl EngineState {
     pub fn handle_command(&mut self, cmd: AudioCommand) {
         match cmd {
             // Deck A commands
-            AudioCommand::LoadDeckA(samples, sr, name, waveform, enhanced, key) => {
-                self.deck_a.load(samples, sr, name, waveform, enhanced, key)
+            AudioCommand::LoadDeckA(samples, sr, name, waveform, enhanced, key, energy_curve, phrases) => {
+                self.deck_a.load(samples, sr, name, waveform, enhanced, key);
+                self.deck_a.set_phrase_data(energy_curve, phrases);
             }
             AudioCommand::PlayA => self.deck_a.play(),
             AudioCommand::PauseA => self.deck_a.pause(),
-            AudioCommand::StopA => self.deck_a.stop(),
+            AudioCommand::StopA => {
+                self.deck_a.stop();
+                self.delay_a.set_enabled(false);
+            }
             AudioCommand::ToggleA => self.deck_a.toggle(),
             AudioCommand::SeekA(pos) => self.deck_a.seek(pos),
             AudioCommand::NudgeA(delta) => self.deck_a.nudge(delta),
@@ -388,12 +609,16 @@ impl EngineState {
             AudioCommand::AdjustGainA(delta) => self.deck_a.adjust_gain(delta),
 
             // Deck B commands
-            AudioCommand::LoadDeckB(samples, sr, name, waveform, enhanced, key) => {
-                self.deck_b.load(samples, sr, name, waveform, enhanced, key)
+            AudioCommand::LoadDeckB(samples, sr, name, waveform, enhanced, key, energy_curve, phrases) => {
+                self.deck_b.load(samples, sr, name, waveform, enhanced, key);
+                self.deck_b.set_phrase_data(energy_curve, phrases);
             }
             AudioCommand::PlayB => self.deck_b.play(),
             AudioCommand::PauseB => self.deck_b.pause(),
-            AudioCommand::StopB => self.deck_b.stop(),
+            AudioCommand::StopB => {
+                self.deck_b.stop();
+                self.delay_b.set_enabled(false);
+            }
             AudioCommand::ToggleB => self.deck_b.toggle(),
             AudioCommand::SeekB(pos) => self.deck_b.seek(pos),
             AudioCommand::NudgeB(delta) => self.deck_b.nudge(delta),
@@ -814,6 +1039,194 @@ impl EngineState {
                 self.bitcrusher_b.set_downsample(ds);
             }
 
+            // Phaser commands
+            AudioCommand::TogglePhaserA => {
+                let enabled = !self.phaser_a.is_enabled();
+                self.phaser_a.set_enabled(enabled);
+            }
+            AudioCommand::TogglePhaserB => {
+                let enabled = !self.phaser_b.is_enabled();
+                self.phaser_b.set_enabled(enabled);
+            }
+
+            // Gate commands
+            AudioCommand::ToggleGateA => {
+                let enabled = !self.gate_a.is_enabled();
+                self.gate_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleGateB => {
+                let enabled = !self.gate_b.is_enabled();
+                self.gate_b.set_enabled(enabled);
+            }
+            AudioCommand::SetGateDivisionA(div) => {
+                self.gate_a.set_division(div);
+            }
+            AudioCommand::SetGateDivisionB(div) => {
+                self.gate_b.set_division(div);
+            }
+
+            // Beat Repeat commands
+            AudioCommand::ToggleBeatRepeatA => {
+                let enabled = !self.beat_repeat_a.is_enabled();
+                self.beat_repeat_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleBeatRepeatB => {
+                let enabled = !self.beat_repeat_b.is_enabled();
+                self.beat_repeat_b.set_enabled(enabled);
+            }
+            AudioCommand::TriggerBeatRepeatA => {
+                self.beat_repeat_a.set_enabled(true);
+                self.beat_repeat_a.trigger();
+            }
+            AudioCommand::TriggerBeatRepeatB => {
+                self.beat_repeat_b.set_enabled(true);
+                self.beat_repeat_b.trigger();
+            }
+
+            // Ring Modulator commands
+            AudioCommand::ToggleRingModA => {
+                let enabled = !self.ringmod_a.is_enabled();
+                self.ringmod_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleRingModB => {
+                let enabled = !self.ringmod_b.is_enabled();
+                self.ringmod_b.set_enabled(enabled);
+            }
+
+            // Shimmer Reverb commands
+            AudioCommand::ToggleShimmerA => {
+                let enabled = !self.shimmer_a.is_enabled();
+                self.shimmer_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleShimmerB => {
+                let enabled = !self.shimmer_b.is_enabled();
+                self.shimmer_b.set_enabled(enabled);
+            }
+
+            // Wash Out commands
+            AudioCommand::ToggleWashOutA => {
+                let enabled = !self.washout_a.is_enabled();
+                self.washout_a.set_enabled(enabled);
+            }
+            AudioCommand::ToggleWashOutB => {
+                let enabled = !self.washout_b.is_enabled();
+                self.washout_b.set_enabled(enabled);
+            }
+            AudioCommand::SetWashAmountA(amount) => {
+                self.washout_a.set_wash(amount);
+            }
+            AudioCommand::SetWashAmountB(amount) => {
+                self.washout_b.set_wash(amount);
+            }
+
+            // Generic effect mix
+            AudioCommand::SetEffectMixA(effect_type, mix) => {
+                match effect_type {
+                    EffectType::Flanger => self.flanger_a.set_mix(mix),
+                    EffectType::Phaser => self.phaser_a.set_mix(mix),
+                    EffectType::Bitcrusher => self.bitcrusher_a.set_mix(mix),
+                    EffectType::Gate => self.gate_a.set_mix(mix),
+                    EffectType::BeatRepeat => self.beat_repeat_a.set_mix(mix),
+                    EffectType::RingMod => self.ringmod_a.set_mix(mix),
+                    EffectType::Shimmer => self.shimmer_a.set_mix(mix),
+                    EffectType::Delay => self.delay_a.set_mix(mix),
+                    EffectType::Reverb => self.reverb_a.set_wet(mix),
+                    _ => {} // Filter, TapeStop, WashOut have own controls
+                }
+            }
+            AudioCommand::SetEffectMixB(effect_type, mix) => {
+                match effect_type {
+                    EffectType::Flanger => self.flanger_b.set_mix(mix),
+                    EffectType::Phaser => self.phaser_b.set_mix(mix),
+                    EffectType::Bitcrusher => self.bitcrusher_b.set_mix(mix),
+                    EffectType::Gate => self.gate_b.set_mix(mix),
+                    EffectType::BeatRepeat => self.beat_repeat_b.set_mix(mix),
+                    EffectType::RingMod => self.ringmod_b.set_mix(mix),
+                    EffectType::Shimmer => self.shimmer_b.set_mix(mix),
+                    EffectType::Delay => self.delay_b.set_mix(mix),
+                    EffectType::Reverb => self.reverb_b.set_wet(mix),
+                    _ => {}
+                }
+            }
+
+            // Delay mode commands
+            AudioCommand::SetDelayModeA(mode) => {
+                self.delay_a.set_mode(mode);
+            }
+            AudioCommand::SetDelayModeB(mode) => {
+                self.delay_b.set_mode(mode);
+            }
+            AudioCommand::CycleDelayModeA => {
+                let next = self.delay_a.mode().next();
+                self.delay_a.set_mode(next);
+            }
+            AudioCommand::CycleDelayModeB => {
+                let next = self.delay_b.mode().next();
+                self.delay_b.set_mode(next);
+            }
+
+            // Looping commands
+            AudioCommand::SetLoopInA => self.deck_a.set_loop_in(),
+            AudioCommand::SetLoopInB => self.deck_b.set_loop_in(),
+            AudioCommand::SetLoopOutA => self.deck_a.set_loop_out(),
+            AudioCommand::SetLoopOutB => self.deck_b.set_loop_out(),
+            AudioCommand::ToggleLoopA => self.deck_a.toggle_loop(),
+            AudioCommand::ToggleLoopB => self.deck_b.toggle_loop(),
+            AudioCommand::ClearLoopA => self.deck_a.clear_loop(),
+            AudioCommand::ClearLoopB => self.deck_b.clear_loop(),
+            AudioCommand::AutoLoopA(beats) => self.deck_a.auto_loop(beats),
+            AudioCommand::AutoLoopB(beats) => self.deck_b.auto_loop(beats),
+            AudioCommand::LoopHalveA => self.deck_a.loop_halve(),
+            AudioCommand::LoopHalveB => self.deck_b.loop_halve(),
+            AudioCommand::LoopDoubleA => self.deck_a.loop_double(),
+            AudioCommand::LoopDoubleB => self.deck_b.loop_double(),
+            AudioCommand::LoopRollStartA(beats) => self.deck_a.start_loop_roll(beats),
+            AudioCommand::LoopRollStartB(beats) => self.deck_b.start_loop_roll(beats),
+            AudioCommand::LoopRollEndA => self.deck_a.end_loop_roll(),
+            AudioCommand::LoopRollEndB => self.deck_b.end_loop_roll(),
+
+            // Channel EQ commands
+            AudioCommand::AdjustEqLowA(d) => self.eq_a.adjust_low(d),
+            AudioCommand::AdjustEqLowB(d) => self.eq_b.adjust_low(d),
+            AudioCommand::AdjustEqMidA(d) => self.eq_a.adjust_mid(d),
+            AudioCommand::AdjustEqMidB(d) => self.eq_b.adjust_mid(d),
+            AudioCommand::AdjustEqHighA(d) => self.eq_a.adjust_high(d),
+            AudioCommand::AdjustEqHighB(d) => self.eq_b.adjust_high(d),
+            AudioCommand::KillEqLowA => self.eq_a.toggle_low_kill(),
+            AudioCommand::KillEqLowB => self.eq_b.toggle_low_kill(),
+            AudioCommand::KillEqMidA => self.eq_a.toggle_mid_kill(),
+            AudioCommand::KillEqMidB => self.eq_b.toggle_mid_kill(),
+            AudioCommand::KillEqHighA => self.eq_a.toggle_high_kill(),
+            AudioCommand::KillEqHighB => self.eq_b.toggle_high_kill(),
+
+            // Quantize commands
+            AudioCommand::ToggleQuantizeA => self.deck_a.toggle_quantize(),
+            AudioCommand::ToggleQuantizeB => self.deck_b.toggle_quantize(),
+            AudioCommand::CycleQuantizeResolutionA => self.deck_a.cycle_quantize_resolution(),
+            AudioCommand::CycleQuantizeResolutionB => self.deck_b.cycle_quantize_resolution(),
+
+            // Key Lock commands
+            AudioCommand::ToggleKeyLockA => self.deck_a.toggle_key_lock(),
+            AudioCommand::ToggleKeyLockB => self.deck_b.toggle_key_lock(),
+
+            // Slip Mode commands
+            AudioCommand::ToggleSlipA => self.deck_a.toggle_slip(),
+            AudioCommand::ToggleSlipB => self.deck_b.toggle_slip(),
+
+            // Sampler commands
+            AudioCommand::LoadSamplerSlot(idx, samples, sr, name) => {
+                self.sampler.load_slot(idx, samples, sr, name);
+            }
+            AudioCommand::ClearSamplerSlot(idx) => self.sampler.clear_slot(idx),
+            AudioCommand::TriggerSampler(idx) => self.sampler.trigger(idx),
+            AudioCommand::StopSampler(idx) => self.sampler.stop(idx),
+            AudioCommand::SetSamplerGain(idx, gain) => self.sampler.set_gain(idx, gain),
+            AudioCommand::SetSamplerLoop(idx, enabled) => self.sampler.set_loop(idx, enabled),
+
+            // Recording commands
+            AudioCommand::StartRecording => self.recording.start(),
+            AudioCommand::StopRecording => self.recording.stop(),
+
             AudioCommand::Shutdown => {} // Handled at higher level
         }
     }
@@ -875,6 +1288,66 @@ impl EngineState {
             mastering_preset: self.mastering.preset(),
             mastering_lufs: self.mastering.lufs(),
             mastering_gain_reduction: self.mastering.gain_reduction_db(),
+            // New effects state
+            flanger_a_enabled: self.flanger_a.is_enabled(),
+            flanger_b_enabled: self.flanger_b.is_enabled(),
+            bitcrusher_a_enabled: self.bitcrusher_a.is_enabled(),
+            bitcrusher_b_enabled: self.bitcrusher_b.is_enabled(),
+            tape_stop_a_enabled: self.tape_stop_a.is_enabled(),
+            tape_stop_b_enabled: self.tape_stop_b.is_enabled(),
+            phaser_a_enabled: self.phaser_a.is_enabled(),
+            phaser_b_enabled: self.phaser_b.is_enabled(),
+            gate_a_enabled: self.gate_a.is_enabled(),
+            gate_b_enabled: self.gate_b.is_enabled(),
+            beat_repeat_a_enabled: self.beat_repeat_a.is_enabled(),
+            beat_repeat_b_enabled: self.beat_repeat_b.is_enabled(),
+            ringmod_a_enabled: self.ringmod_a.is_enabled(),
+            ringmod_b_enabled: self.ringmod_b.is_enabled(),
+            shimmer_a_enabled: self.shimmer_a.is_enabled(),
+            shimmer_b_enabled: self.shimmer_b.is_enabled(),
+            washout_a_enabled: self.washout_a.is_enabled(),
+            washout_b_enabled: self.washout_b.is_enabled(),
+            washout_a_amount: self.washout_a.wash(),
+            washout_b_amount: self.washout_b.wash(),
+            delay_a_mode: self.delay_a.mode(),
+            delay_b_mode: self.delay_b.mode(),
+            // Effect mix levels
+            flanger_a_mix: self.flanger_a.mix(),
+            flanger_b_mix: self.flanger_b.mix(),
+            phaser_a_mix: self.phaser_a.mix(),
+            phaser_b_mix: self.phaser_b.mix(),
+            bitcrusher_a_mix: self.bitcrusher_a.mix(),
+            bitcrusher_b_mix: self.bitcrusher_b.mix(),
+            gate_a_mix: self.gate_a.mix(),
+            gate_b_mix: self.gate_b.mix(),
+            beat_repeat_a_mix: self.beat_repeat_a.mix(),
+            beat_repeat_b_mix: self.beat_repeat_b.mix(),
+            ringmod_a_mix: self.ringmod_a.mix(),
+            ringmod_b_mix: self.ringmod_b.mix(),
+            shimmer_a_mix: self.shimmer_a.mix(),
+            shimmer_b_mix: self.shimmer_b.mix(),
+            delay_a_mix: self.delay_a.mix(),
+            delay_b_mix: self.delay_b.mix(),
+            reverb_a_mix: self.reverb_a.wet(),
+            reverb_b_mix: self.reverb_b.wet(),
+            // Channel EQ state
+            eq_a_low: self.eq_a.low_gain(),
+            eq_a_mid: self.eq_a.mid_gain(),
+            eq_a_high: self.eq_a.high_gain(),
+            eq_a_low_kill: self.eq_a.low_kill(),
+            eq_a_mid_kill: self.eq_a.mid_kill(),
+            eq_a_high_kill: self.eq_a.high_kill(),
+            eq_b_low: self.eq_b.low_gain(),
+            eq_b_mid: self.eq_b.mid_gain(),
+            eq_b_high: self.eq_b.high_gain(),
+            eq_b_low_kill: self.eq_b.low_kill(),
+            eq_b_mid_kill: self.eq_b.mid_kill(),
+            eq_b_high_kill: self.eq_b.high_kill(),
+            // Sampler state
+            sampler_slots: self.sampler.slot_states(),
+            // Recording state
+            is_recording: self.recording.is_recording,
+            recording_duration: self.recording.duration_secs(),
         }
     }
 
@@ -993,14 +1466,9 @@ impl EngineState {
 
     /// Process audio for output buffer
     pub fn process(&mut self, output: &mut [f32]) {
-        let len = output.len();
-
-        // Ensure pre-allocated buffers are large enough
-        // This should rarely happen after the first call
-        if len > self.buffer_a.len() {
-            self.buffer_a.resize(len, 0.0);
-            self.buffer_b.resize(len, 0.0);
-        }
+        // Clamp to pre-allocated buffer size to avoid allocations in audio callback
+        let len = output.len().min(self.buffer_a.len());
+        let output = &mut output[..len];
 
         // Zero the buffers (no allocation - just memset)
         self.buffer_a[..len].fill(0.0);
@@ -1017,63 +1485,67 @@ impl EngineState {
         self.deck_a.process(buf_a);
         self.deck_b.process(buf_b);
 
+        // Feed BPM to beat-synced effects
+        if let Some(bpm_a) = self.deck_a.current_bpm() {
+            self.gate_a.set_bpm(bpm_a);
+            self.beat_repeat_a.set_bpm(bpm_a);
+        }
+        if let Some(bpm_b) = self.deck_b.current_bpm() {
+            self.gate_b.set_bpm(bpm_b);
+            self.beat_repeat_b.set_bpm(bpm_b);
+        }
+
         // Apply effects chain:
-        // Deck → Tape Stop → Vinyl → Bitcrusher → Filter → Flanger → Delay → Reverb → Mixer
+        // TapeStop → BeatRepeat → Vinyl → Bitcrusher → RingMod → Gate
+        //   → Filter → Flanger → Phaser → Delay → Reverb → ShimmerReverb → WashOut
 
         // Deck A chain
-        // 1. Tape stop (pitch slowdown effect)
+        // TapeStop → BeatRepeat → Vinyl → Bitcrusher → RingMod → Gate
+        //   → EQ → Filter → Flanger → Phaser → Delay → Reverb → Shimmer → WashOut
         self.tape_stop_a.process(buf_a);
-
-        // 2. Vinyl emulation (adds warmth, noise, wow/flutter)
+        self.beat_repeat_a.process(buf_a);
         self.vinyl_a.process(buf_a);
-
-        // 3. Bitcrusher (lo-fi crunch)
         self.bitcrusher_a.process(buf_a);
-
-        // 4. Filter (mode-selected)
+        self.ringmod_a.process(buf_a);
+        self.gate_a.process(buf_a);
+        self.eq_a.process(buf_a);
         match self.filter_mode_a {
             FilterMode::Biquad => self.filter_a.process(buf_a),
             FilterMode::Ladder => self.ladder_a.process(buf_a),
             FilterMode::SVF => self.svf_a.process(buf_a),
         }
-
-        // 5. Flanger (sweeping comb filter)
         self.flanger_a.process(buf_a);
-
-        // 6. Delay
+        self.phaser_a.process(buf_a);
         self.delay_a.process(buf_a);
-
-        // 7. Reverb
         self.reverb_a.process(buf_a);
+        self.shimmer_a.process(buf_a);
+        self.washout_a.process(buf_a);
 
         // Deck B chain
-        // 1. Tape stop
         self.tape_stop_b.process(buf_b);
-
-        // 2. Vinyl emulation
+        self.beat_repeat_b.process(buf_b);
         self.vinyl_b.process(buf_b);
-
-        // 3. Bitcrusher
         self.bitcrusher_b.process(buf_b);
-
-        // 4. Filter (mode-selected)
+        self.ringmod_b.process(buf_b);
+        self.gate_b.process(buf_b);
+        self.eq_b.process(buf_b);
         match self.filter_mode_b {
             FilterMode::Biquad => self.filter_b.process(buf_b),
             FilterMode::Ladder => self.ladder_b.process(buf_b),
             FilterMode::SVF => self.svf_b.process(buf_b),
         }
-
-        // 5. Flanger
         self.flanger_b.process(buf_b);
-
-        // 6. Delay
+        self.phaser_b.process(buf_b);
         self.delay_b.process(buf_b);
-
-        // 7. Reverb
         self.reverb_b.process(buf_b);
+        self.shimmer_b.process(buf_b);
+        self.washout_b.process(buf_b);
 
         // Mix to output
         self.mixer.mix(buf_a, buf_b, output);
+
+        // Mix sampler slots into master output
+        self.sampler.process(output);
 
         // Mastering chain - EQ, compression, saturation, stereo enhancement
         // Applied before the limiter for transparent processing
@@ -1087,6 +1559,11 @@ impl EngineState {
         const CEILING: f32 = 0.891;
         for sample in output.iter_mut() {
             *sample = sample.clamp(-CEILING, CEILING);
+        }
+
+        // Recording tap (after mastering + limiter for loudness-normalized output)
+        if self.recording.is_recording {
+            self.recording.add_samples(output);
         }
     }
 }

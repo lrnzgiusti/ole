@@ -1,8 +1,32 @@
-use ole_audio::{AudioEvent, DeckState, DelayModulation, FilterMode, FilterType, LufsValues, MasteringPreset, VinylPreset};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use ole_audio::{AudioEvent, DeckState, DelayMode, DelayModulation, FilterMode, FilterType, LufsValues, MasteringPreset, VinylPreset};
 use ole_library::CachedAnalysis;
-use ole_analysis::CamelotKey;
+use ole_analysis::{CamelotKey, PhraseType};
 
 pub const SPECTRUM_BANDS: usize = 32;
+pub const FX_SLOT_COUNT: usize = 14;
+
+pub fn fx_cursor_effect_type(cursor: usize) -> Option<ole_input::EffectType> {
+    match cursor {
+        0 => Some(ole_input::EffectType::Filter),
+        // 1 => None (EQ)
+        2 => Some(ole_input::EffectType::Delay),
+        3 => Some(ole_input::EffectType::Reverb),
+        4 => Some(ole_input::EffectType::Flanger),
+        5 => Some(ole_input::EffectType::Phaser),
+        6 => Some(ole_input::EffectType::Bitcrusher),
+        7 => Some(ole_input::EffectType::Gate),
+        8 => Some(ole_input::EffectType::BeatRepeat),
+        9 => Some(ole_input::EffectType::RingMod),
+        10 => Some(ole_input::EffectType::Shimmer),
+        11 => Some(ole_input::EffectType::WashOut),
+        // 12 => None (Vinyl)
+        13 => Some(ole_input::EffectType::TapeStop),
+        _ => None,
+    }
+}
 pub const AFTERGLOW_HISTORY: usize = 15;
 pub const WATERFALL_DEPTH: usize = 256;
 
@@ -78,18 +102,80 @@ pub enum ScopeMode {
     Waterfall,
 }
 
+/// Sort column for library
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortColumn {
+    #[default]
+    Key,
+    Bpm,
+    Title,
+    Duration,
+    Artist,
+    Score,
+}
+
+impl SortColumn {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Key => "KEY",
+            Self::Bpm => "BPM",
+            Self::Title => "TITLE",
+            Self::Duration => "TIME",
+            Self::Artist => "ARTIST",
+            Self::Score => "SCORE",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Key => Self::Bpm,
+            Self::Bpm => Self::Title,
+            Self::Title => Self::Duration,
+            Self::Duration => Self::Artist,
+            Self::Artist => Self::Score,
+            Self::Score => Self::Key,
+        }
+    }
+}
+
+/// A played track entry for history
+#[derive(Debug, Clone)]
+pub struct HistoryEntry {
+    pub title: String,
+    pub artist: String,
+    pub key: Option<String>,
+    pub bpm: Option<f32>,
+    pub path: std::path::PathBuf,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LibraryState {
     pub tracks: Vec<CachedAnalysis>,
     pub selected_index: usize,
     pub scroll_offset: usize,
     pub filter_key: Option<String>,
+    pub compatible_keys: Vec<String>, // All compatible keys for harmonic filter
     pub current_playing_key: Option<String>,
     pub is_scanning: bool,
     pub scan_progress: (usize, usize),
     pub search_query: String,
+    pub sort_column: SortColumn,
+    pub sort_ascending: bool,
+    pub history: Vec<HistoryEntry>,
+    pub show_history: bool,
     /// Set to true when selection changes; consumed by library widget to scroll once
     pub needs_scroll: bool,
+    // Per-deck analysis data for copilot
+    pub current_key_a: Option<String>,
+    pub current_key_b: Option<String>,
+    pub current_bpm_a: Option<f32>,
+    pub current_bpm_b: Option<f32>,
+    pub current_energy_a: Option<f32>,
+    pub current_energy_b: Option<f32>,
+    // Copilot state
+    pub copilot_enabled: bool,
+    pub copilot_scores: HashMap<PathBuf, f32>,
+    pub energy_direction: ole_input::EnergyDirection,
 }
 
 impl LibraryState {
@@ -130,27 +216,70 @@ impl LibraryState {
     }
 
     pub fn filtered_tracks(&self) -> Vec<&CachedAnalysis> {
-        self.tracks
+        let mut result: Vec<&CachedAnalysis> = self.tracks
             .iter()
             .filter(|t| {
-                // Key filter
-                if let Some(ref filter) = self.filter_key {
+                // Key filter (single key or compatible keys)
+                if !self.compatible_keys.is_empty() {
+                    if !t.key.as_ref().map(|k| self.compatible_keys.contains(k)).unwrap_or(false) {
+                        return false;
+                    }
+                } else if let Some(ref filter) = self.filter_key {
                     if !t.key.as_ref().map(|k| k == filter).unwrap_or(false) {
                         return false;
                     }
                 }
-                // Search filter
+                // Search filter (fuzzy: all query words must match somewhere)
                 if !self.search_query.is_empty() {
                     let q = self.search_query.to_lowercase();
-                    if !t.title.to_lowercase().contains(&q)
-                        && !t.artist.to_lowercase().contains(&q)
-                    {
-                        return false;
+                    let haystack = format!("{} {} {}", t.title, t.artist, t.key.as_deref().unwrap_or("")).to_lowercase();
+                    // All space-separated words must appear
+                    for word in q.split_whitespace() {
+                        if !haystack.contains(word) {
+                            return false;
+                        }
                     }
                 }
                 true
             })
-            .collect()
+            .collect();
+
+        // Sort
+        let asc = self.sort_ascending;
+        match self.sort_column {
+            SortColumn::Key => result.sort_by(|a, b| {
+                let cmp = a.key.as_deref().unwrap_or("ZZ").cmp(b.key.as_deref().unwrap_or("ZZ"));
+                if asc { cmp } else { cmp.reverse() }
+            }),
+            SortColumn::Bpm => result.sort_by(|a, b| {
+                let cmp = a.bpm.unwrap_or(0.0).partial_cmp(&b.bpm.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal);
+                if asc { cmp } else { cmp.reverse() }
+            }),
+            SortColumn::Title => result.sort_by(|a, b| {
+                let cmp = a.title.to_lowercase().cmp(&b.title.to_lowercase());
+                if asc { cmp } else { cmp.reverse() }
+            }),
+            SortColumn::Duration => result.sort_by(|a, b| {
+                let cmp = a.duration_secs.partial_cmp(&b.duration_secs).unwrap_or(std::cmp::Ordering::Equal);
+                if asc { cmp } else { cmp.reverse() }
+            }),
+            SortColumn::Artist => result.sort_by(|a, b| {
+                let cmp = a.artist.to_lowercase().cmp(&b.artist.to_lowercase());
+                if asc { cmp } else { cmp.reverse() }
+            }),
+            SortColumn::Score => {
+                let scores = &self.copilot_scores;
+                result.sort_by(|a, b| {
+                    let sa = scores.get(&a.path).unwrap_or(&0.0);
+                    let sb = scores.get(&b.path).unwrap_or(&0.0);
+                    let cmp = sa.partial_cmp(sb).unwrap_or(std::cmp::Ordering::Equal);
+                    // Score: default descending (highest first)
+                    if asc { cmp } else { cmp.reverse() }
+                });
+            }
+        }
+
+        result
     }
 
     pub fn selected_track(&self) -> Option<&CachedAnalysis> {
@@ -159,6 +288,7 @@ impl LibraryState {
 
     pub fn set_filter(&mut self, key: Option<String>) {
         self.filter_key = key;
+        self.compatible_keys.clear();
         self.selected_index = 0;
         self.scroll_offset = 0;
         self.needs_scroll = true;
@@ -170,7 +300,8 @@ impl LibraryState {
                 let compatible: Vec<String> =
                     camelot.compatible_keys().iter().map(|k| k.to_string()).collect();
                 if !compatible.is_empty() {
-                    self.filter_key = Some(compatible[0].clone());
+                    self.compatible_keys = compatible;
+                    self.filter_key = None;
                     self.selected_index = 0;
                     self.scroll_offset = 0;
                     self.needs_scroll = true;
@@ -179,9 +310,59 @@ impl LibraryState {
         }
     }
 
+    pub fn clear_filter(&mut self) {
+        self.filter_key = None;
+        self.compatible_keys.clear();
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        self.needs_scroll = true;
+    }
+
+    pub fn cycle_sort(&mut self) {
+        self.sort_column = self.sort_column.next();
+        self.selected_index = 0;
+        self.needs_scroll = true;
+    }
+
+    pub fn reverse_sort(&mut self) {
+        self.sort_ascending = !self.sort_ascending;
+        self.selected_index = 0;
+        self.needs_scroll = true;
+    }
+
+    pub fn add_to_history(&mut self, track: &CachedAnalysis) {
+        // Avoid consecutive duplicates
+        if self.history.last().map(|h| h.path == track.path).unwrap_or(false) {
+            return;
+        }
+        self.history.push(HistoryEntry {
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            key: track.key.clone(),
+            bpm: track.bpm,
+            path: track.path.clone(),
+        });
+    }
+
+    pub fn page_down(&mut self) {
+        let count = self.filtered_tracks().len();
+        if count > 0 {
+            self.selected_index = (self.selected_index + 10).min(count - 1);
+            self.needs_scroll = true;
+        }
+    }
+
+    pub fn page_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(10);
+        self.needs_scroll = true;
+    }
+
     pub fn jump_to_key(&mut self, position: u8, is_minor: bool) -> bool {
         let key_str = format!("{}{}", position, if is_minor { 'A' } else { 'B' });
+        // Clear all filters so raw index matches filtered_tracks() index
         self.filter_key = None;
+        self.compatible_keys.clear();
+        self.search_query.clear();
         for (i, track) in self.tracks.iter().enumerate() {
             if track.key.as_ref().map(|k| k == &key_str).unwrap_or(false) {
                 self.selected_index = i;
@@ -193,8 +374,117 @@ impl LibraryState {
         false
     }
 
+    /// Compute copilot compatibility scores for all tracks.
+    ///
+    /// Uses the reference deck's key, BPM, and energy to score every track.
+    /// Weighted: harmonic=0.40, BPM=0.35, energy=0.15, history=0.10.
+    pub fn compute_copilot_scores(&mut self) {
+        self.copilot_scores.clear();
+        if !self.copilot_enabled {
+            return;
+        }
+
+        // Pick reference deck: prefer A, fall back to B
+        let (ref_key, ref_bpm, ref_energy) =
+            if self.current_key_a.is_some() || self.current_bpm_a.is_some() {
+                (&self.current_key_a, self.current_bpm_a, self.current_energy_a)
+            } else {
+                (&self.current_key_b, self.current_bpm_b, self.current_energy_b)
+            };
+
+        let ref_camelot = ref_key.as_ref().and_then(|k| CamelotKey::parse(k));
+        let ref_bpm_val = ref_bpm.unwrap_or(0.0);
+        let ref_energy_val = ref_energy.unwrap_or(0.5);
+
+        // History paths for penalty
+        let history_paths: Vec<&std::path::Path> =
+            self.history.iter().map(|h| h.path.as_path()).collect();
+
+        for track in &self.tracks {
+            let mut score = 0.0f32;
+
+            // Harmonic score (0.40 weight)
+            if let (Some(ref_c), Some(track_key)) = (&ref_camelot, &track.key) {
+                if let Some(track_c) = CamelotKey::parse(track_key) {
+                    let dist = ref_c.wheel_distance(&track_c);
+                    let harmonic = match dist {
+                        0 => 1.0,
+                        1 => 0.8,
+                        2 => 0.4,
+                        _ => 0.0,
+                    };
+                    score += harmonic * 0.40;
+                }
+            }
+
+            // BPM score (0.35 weight)
+            if ref_bpm_val > 0.0 {
+                if let Some(track_bpm) = track.bpm {
+                    let delta_pct = ((track_bpm - ref_bpm_val) / ref_bpm_val).abs() * 100.0;
+                    let half_double = {
+                        let ratio = track_bpm / ref_bpm_val;
+                        (ratio - 0.5).abs() < 0.05 || (ratio - 2.0).abs() < 0.1
+                    };
+                    let bpm_score = if delta_pct < 2.0 {
+                        1.0
+                    } else if delta_pct < 4.0 {
+                        0.8
+                    } else if delta_pct < 8.0 {
+                        0.5
+                    } else if half_double {
+                        0.3
+                    } else {
+                        0.0
+                    };
+                    score += bpm_score * 0.35;
+                }
+            }
+
+            // Energy score (0.15 weight)
+            if let Some(track_energy) = track.energy_level {
+                let energy_score = match self.energy_direction {
+                    ole_input::EnergyDirection::Maintain => {
+                        1.0 - (track_energy - ref_energy_val).abs().min(1.0)
+                    }
+                    ole_input::EnergyDirection::Build => {
+                        let delta = track_energy - ref_energy_val;
+                        if delta > 0.0 { (delta * 3.0).min(1.0) } else { 0.0 }
+                    }
+                    ole_input::EnergyDirection::Drop => {
+                        let delta = ref_energy_val - track_energy;
+                        if delta > 0.0 { (delta * 3.0).min(1.0) } else { 0.0 }
+                    }
+                };
+                score += energy_score * 0.15;
+            }
+
+            // History penalty (0.10 weight)
+            let history_score = if let Some(pos) = history_paths
+                .iter()
+                .rposition(|p| *p == track.path.as_path())
+            {
+                let recency = history_paths.len() - pos;
+                if recency <= 5 {
+                    0.0
+                } else if recency <= 20 {
+                    0.3
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
+            score += history_score * 0.10;
+
+            self.copilot_scores.insert(track.path.clone(), score);
+        }
+    }
+
     pub fn jump_to_bpm(&mut self, target_bpm: u16) -> bool {
+        // Clear all filters so raw index matches filtered_tracks() index
         self.filter_key = None;
+        self.compatible_keys.clear();
+        self.search_query.clear();
         let target = target_bpm as f32;
         for (i, track) in self.tracks.iter().enumerate() {
             if let Some(bpm) = track.bpm {
@@ -295,6 +585,68 @@ pub struct GuiState {
     pub mastering_lufs: LufsValues,
     pub mastering_gain_reduction: f32,
 
+    // New effects
+    pub flanger_a_enabled: bool,
+    pub flanger_b_enabled: bool,
+    pub bitcrusher_a_enabled: bool,
+    pub bitcrusher_b_enabled: bool,
+    pub tape_stop_a_enabled: bool,
+    pub tape_stop_b_enabled: bool,
+    pub phaser_a_enabled: bool,
+    pub phaser_b_enabled: bool,
+    pub gate_a_enabled: bool,
+    pub gate_b_enabled: bool,
+    pub beat_repeat_a_enabled: bool,
+    pub beat_repeat_b_enabled: bool,
+    pub ringmod_a_enabled: bool,
+    pub ringmod_b_enabled: bool,
+    pub shimmer_a_enabled: bool,
+    pub shimmer_b_enabled: bool,
+    pub washout_a_enabled: bool,
+    pub washout_b_enabled: bool,
+    pub washout_a_amount: f32,
+    pub washout_b_amount: f32,
+    pub delay_a_mode: DelayMode,
+    pub delay_b_mode: DelayMode,
+
+    // Effect mix levels (dry/wet 0.0-1.0)
+    pub flanger_a_mix: f32,
+    pub flanger_b_mix: f32,
+    pub phaser_a_mix: f32,
+    pub phaser_b_mix: f32,
+    pub bitcrusher_a_mix: f32,
+    pub bitcrusher_b_mix: f32,
+    pub gate_a_mix: f32,
+    pub gate_b_mix: f32,
+    pub beat_repeat_a_mix: f32,
+    pub beat_repeat_b_mix: f32,
+    pub ringmod_a_mix: f32,
+    pub ringmod_b_mix: f32,
+    pub shimmer_a_mix: f32,
+    pub shimmer_b_mix: f32,
+    pub delay_a_mix: f32,
+    pub delay_b_mix: f32,
+    pub reverb_a_mix: f32,
+    pub reverb_b_mix: f32,
+
+    // Selected effect for mix adjustment
+    pub selected_effect: Option<ole_input::EffectType>,
+    pub fx_cursor: usize,
+
+    // Channel EQ
+    pub eq_a_low: f32,
+    pub eq_a_mid: f32,
+    pub eq_a_high: f32,
+    pub eq_a_low_kill: bool,
+    pub eq_a_mid_kill: bool,
+    pub eq_a_high_kill: bool,
+    pub eq_b_low: f32,
+    pub eq_b_mid: f32,
+    pub eq_b_high: f32,
+    pub eq_b_low_kill: bool,
+    pub eq_b_mid_kill: bool,
+    pub eq_b_high_kill: bool,
+
     // UI state
     pub mode: ole_input::Mode,
     pub focused: FocusedPane,
@@ -303,10 +655,12 @@ pub struct GuiState {
     pub message_type: MessageType,
     pub show_help: bool,
     pub help_scroll: f32,
+    pub help_scroll_dirty: bool,
 
     // Library
     pub library: LibraryState,
     pub show_library: bool,
+    pub library_search_active: bool, // sub-mode: typing goes to search
 
     // Visualization
     pub show_scope: bool,
@@ -352,6 +706,15 @@ pub struct GuiState {
     pub crt_intensity: u8, // 0=off, 1=subtle, 2=medium, 3=heavy
     pub glitch_frames: u8,
     pub glitch_intensity: f32,
+    // Sampler state
+    pub sampler_slots: [(bool, bool, bool, Option<String>); 8], // (loaded, playing, loop_enabled, name)
+    // Recording state
+    pub is_recording: bool,
+    pub recording_duration: f64,
+
+    pub drop_flash: f32,      // Screen flash on detected energy spike (0.0..1.0)
+    pub fx_flash: f32,        // Brief flash when toggling effects
+    prev_bass_energy: f32,    // For drop detection
 
     // Message auto-clear
     pub message_frame: u64,
@@ -399,6 +762,60 @@ impl Default for GuiState {
             mastering_preset: MasteringPreset::default(),
             mastering_lufs: LufsValues::default(),
             mastering_gain_reduction: 0.0,
+            flanger_a_enabled: false,
+            flanger_b_enabled: false,
+            bitcrusher_a_enabled: false,
+            bitcrusher_b_enabled: false,
+            tape_stop_a_enabled: false,
+            tape_stop_b_enabled: false,
+            phaser_a_enabled: false,
+            phaser_b_enabled: false,
+            gate_a_enabled: false,
+            gate_b_enabled: false,
+            beat_repeat_a_enabled: false,
+            beat_repeat_b_enabled: false,
+            ringmod_a_enabled: false,
+            ringmod_b_enabled: false,
+            shimmer_a_enabled: false,
+            shimmer_b_enabled: false,
+            washout_a_enabled: false,
+            washout_b_enabled: false,
+            washout_a_amount: 0.0,
+            washout_b_amount: 0.0,
+            delay_a_mode: DelayMode::default(),
+            delay_b_mode: DelayMode::default(),
+            flanger_a_mix: 0.5,
+            flanger_b_mix: 0.5,
+            phaser_a_mix: 0.5,
+            phaser_b_mix: 0.5,
+            bitcrusher_a_mix: 1.0,
+            bitcrusher_b_mix: 1.0,
+            gate_a_mix: 1.0,
+            gate_b_mix: 1.0,
+            beat_repeat_a_mix: 1.0,
+            beat_repeat_b_mix: 1.0,
+            ringmod_a_mix: 0.5,
+            ringmod_b_mix: 0.5,
+            shimmer_a_mix: 0.4,
+            shimmer_b_mix: 0.4,
+            delay_a_mix: 0.5,
+            delay_b_mix: 0.5,
+            reverb_a_mix: 0.3,
+            reverb_b_mix: 0.3,
+            selected_effect: None,
+            fx_cursor: 0,
+            eq_a_low: 0.0,
+            eq_a_mid: 0.0,
+            eq_a_high: 0.0,
+            eq_a_low_kill: false,
+            eq_a_mid_kill: false,
+            eq_a_high_kill: false,
+            eq_b_low: 0.0,
+            eq_b_mid: 0.0,
+            eq_b_high: 0.0,
+            eq_b_low_kill: false,
+            eq_b_mid_kill: false,
+            eq_b_high_kill: false,
             mode: ole_input::Mode::Normal,
             focused: FocusedPane::DeckA,
             command_buffer: String::new(),
@@ -406,8 +823,10 @@ impl Default for GuiState {
             message_type: MessageType::Info,
             show_help: false,
             help_scroll: 0.0,
+            help_scroll_dirty: false,
             library: LibraryState::default(),
             show_library: true,
+            library_search_active: false,
             show_scope: false,
             scope_mode: ScopeMode::default(),
             frame_count: 0,
@@ -433,8 +852,14 @@ impl Default for GuiState {
             noise_enabled: false,
             chromatic_enabled: false,
             crt_intensity: 1,
+            sampler_slots: Default::default(),
+            is_recording: false,
+            recording_duration: 0.0,
             glitch_frames: 0,
             glitch_intensity: 0.0,
+            drop_flash: 0.0,
+            fx_flash: 0.0,
+            prev_bass_energy: 0.0,
             message_frame: 0,
             should_quit: false,
         }
@@ -481,6 +906,61 @@ impl GuiState {
                 mastering_preset,
                 mastering_lufs,
                 mastering_gain_reduction,
+                flanger_a_enabled,
+                flanger_b_enabled,
+                bitcrusher_a_enabled,
+                bitcrusher_b_enabled,
+                tape_stop_a_enabled,
+                tape_stop_b_enabled,
+                phaser_a_enabled,
+                phaser_b_enabled,
+                gate_a_enabled,
+                gate_b_enabled,
+                beat_repeat_a_enabled,
+                beat_repeat_b_enabled,
+                ringmod_a_enabled,
+                ringmod_b_enabled,
+                shimmer_a_enabled,
+                shimmer_b_enabled,
+                washout_a_enabled,
+                washout_b_enabled,
+                washout_a_amount,
+                washout_b_amount,
+                delay_a_mode,
+                delay_b_mode,
+                flanger_a_mix,
+                flanger_b_mix,
+                phaser_a_mix,
+                phaser_b_mix,
+                bitcrusher_a_mix,
+                bitcrusher_b_mix,
+                gate_a_mix,
+                gate_b_mix,
+                beat_repeat_a_mix,
+                beat_repeat_b_mix,
+                ringmod_a_mix,
+                ringmod_b_mix,
+                shimmer_a_mix,
+                shimmer_b_mix,
+                delay_a_mix,
+                delay_b_mix,
+                reverb_a_mix,
+                reverb_b_mix,
+                eq_a_low,
+                eq_a_mid,
+                eq_a_high,
+                eq_a_low_kill,
+                eq_a_mid_kill,
+                eq_a_high_kill,
+                eq_b_low,
+                eq_b_mid,
+                eq_b_high,
+                eq_b_low_kill,
+                eq_b_mid_kill,
+                eq_b_high_kill,
+                sampler_slots,
+                is_recording,
+                recording_duration,
             } => {
                 self.deck_a = *deck_a;
                 self.deck_b = *deck_b;
@@ -518,6 +998,61 @@ impl GuiState {
                 self.mastering_preset = mastering_preset;
                 self.mastering_lufs = mastering_lufs;
                 self.mastering_gain_reduction = mastering_gain_reduction;
+                self.flanger_a_enabled = flanger_a_enabled;
+                self.flanger_b_enabled = flanger_b_enabled;
+                self.bitcrusher_a_enabled = bitcrusher_a_enabled;
+                self.bitcrusher_b_enabled = bitcrusher_b_enabled;
+                self.tape_stop_a_enabled = tape_stop_a_enabled;
+                self.tape_stop_b_enabled = tape_stop_b_enabled;
+                self.phaser_a_enabled = phaser_a_enabled;
+                self.phaser_b_enabled = phaser_b_enabled;
+                self.gate_a_enabled = gate_a_enabled;
+                self.gate_b_enabled = gate_b_enabled;
+                self.beat_repeat_a_enabled = beat_repeat_a_enabled;
+                self.beat_repeat_b_enabled = beat_repeat_b_enabled;
+                self.ringmod_a_enabled = ringmod_a_enabled;
+                self.ringmod_b_enabled = ringmod_b_enabled;
+                self.shimmer_a_enabled = shimmer_a_enabled;
+                self.shimmer_b_enabled = shimmer_b_enabled;
+                self.washout_a_enabled = washout_a_enabled;
+                self.washout_b_enabled = washout_b_enabled;
+                self.washout_a_amount = washout_a_amount;
+                self.washout_b_amount = washout_b_amount;
+                self.delay_a_mode = delay_a_mode;
+                self.delay_b_mode = delay_b_mode;
+                self.flanger_a_mix = flanger_a_mix;
+                self.flanger_b_mix = flanger_b_mix;
+                self.phaser_a_mix = phaser_a_mix;
+                self.phaser_b_mix = phaser_b_mix;
+                self.bitcrusher_a_mix = bitcrusher_a_mix;
+                self.bitcrusher_b_mix = bitcrusher_b_mix;
+                self.gate_a_mix = gate_a_mix;
+                self.gate_b_mix = gate_b_mix;
+                self.beat_repeat_a_mix = beat_repeat_a_mix;
+                self.beat_repeat_b_mix = beat_repeat_b_mix;
+                self.ringmod_a_mix = ringmod_a_mix;
+                self.ringmod_b_mix = ringmod_b_mix;
+                self.shimmer_a_mix = shimmer_a_mix;
+                self.shimmer_b_mix = shimmer_b_mix;
+                self.delay_a_mix = delay_a_mix;
+                self.delay_b_mix = delay_b_mix;
+                self.reverb_a_mix = reverb_a_mix;
+                self.reverb_b_mix = reverb_b_mix;
+                self.eq_a_low = eq_a_low;
+                self.eq_a_mid = eq_a_mid;
+                self.eq_a_high = eq_a_high;
+                self.eq_a_low_kill = eq_a_low_kill;
+                self.eq_a_mid_kill = eq_a_mid_kill;
+                self.eq_a_high_kill = eq_a_high_kill;
+                self.eq_b_low = eq_b_low;
+                self.eq_b_mid = eq_b_mid;
+                self.eq_b_high = eq_b_high;
+                self.eq_b_low_kill = eq_b_low_kill;
+                self.eq_b_mid_kill = eq_b_mid_kill;
+                self.eq_b_high_kill = eq_b_high_kill;
+                self.sampler_slots = sampler_slots;
+                self.is_recording = is_recording;
+                self.recording_duration = recording_duration;
             }
             AudioEvent::TrackLoaded { deck } => {
                 self.set_success(format!("Track loaded to deck {}", deck));
@@ -565,6 +1100,7 @@ impl GuiState {
         self.show_help = !self.show_help;
         if self.show_help {
             self.help_scroll = 0.0;
+            self.help_scroll_dirty = true;
         }
     }
 
@@ -591,6 +1127,49 @@ impl GuiState {
             FocusedPane::DeckB => FocusedPane::DeckA,
             _ => FocusedPane::DeckA,
         };
+    }
+
+    /// Find the next phrase marker after the current playback position for a deck.
+    /// Returns (phrase_type, bars_remaining).
+    pub fn next_phrase(&self, is_deck_a: bool) -> Option<(PhraseType, f64)> {
+        let deck = if is_deck_a { &self.deck_a } else { &self.deck_b };
+        let pos = deck.position;
+        let bpm = deck.bpm?;
+        let secs_per_bar = 4.0 * 60.0 / bpm as f64;
+
+        for marker in deck.phrase_markers.iter() {
+            if marker.position_secs > pos {
+                let bars_remaining = (marker.position_secs - pos) / secs_per_bar;
+                return Some((marker.phrase_type, bars_remaining));
+            }
+        }
+        None
+    }
+
+    /// Get current mix level for an effect on a deck
+    pub fn get_effect_mix(&self, is_deck_a: bool, effect_type: ole_input::EffectType) -> f32 {
+        use ole_input::EffectType;
+        match (is_deck_a, effect_type) {
+            (true, EffectType::Flanger) => self.flanger_a_mix,
+            (false, EffectType::Flanger) => self.flanger_b_mix,
+            (true, EffectType::Phaser) => self.phaser_a_mix,
+            (false, EffectType::Phaser) => self.phaser_b_mix,
+            (true, EffectType::Bitcrusher) => self.bitcrusher_a_mix,
+            (false, EffectType::Bitcrusher) => self.bitcrusher_b_mix,
+            (true, EffectType::Gate) => self.gate_a_mix,
+            (false, EffectType::Gate) => self.gate_b_mix,
+            (true, EffectType::BeatRepeat) => self.beat_repeat_a_mix,
+            (false, EffectType::BeatRepeat) => self.beat_repeat_b_mix,
+            (true, EffectType::RingMod) => self.ringmod_a_mix,
+            (false, EffectType::RingMod) => self.ringmod_b_mix,
+            (true, EffectType::Shimmer) => self.shimmer_a_mix,
+            (false, EffectType::Shimmer) => self.shimmer_b_mix,
+            (true, EffectType::Delay) => self.delay_a_mix,
+            (false, EffectType::Delay) => self.delay_b_mix,
+            (true, EffectType::Reverb) => self.reverb_a_mix,
+            (false, EffectType::Reverb) => self.reverb_b_mix,
+            _ => 1.0, // Filter, TapeStop, WashOut — no mix
+        }
     }
 
     pub fn update_animations(&mut self) {
@@ -634,6 +1213,21 @@ impl GuiState {
                 self.glitch_intensity = 0.0;
             }
         }
+
+        // Drop detection: flash on sudden bass energy spike
+        let bass_energy = self.deck_a.spectrum.bands.get(..4).map(|s: &[f32]| s.iter().sum::<f32>()).unwrap_or(0.0)
+            + self.deck_b.spectrum.bands.get(..4).map(|s: &[f32]| s.iter().sum::<f32>()).unwrap_or(0.0);
+        let bass_delta = bass_energy - self.prev_bass_energy;
+        if bass_delta > 1.5 && bass_energy > 2.0 {
+            self.drop_flash = 0.6;
+        }
+        self.prev_bass_energy = bass_energy;
+
+        // Flash decays
+        self.drop_flash *= 0.8;
+        if self.drop_flash < 0.01 { self.drop_flash = 0.0; }
+        self.fx_flash *= 0.75;
+        if self.fx_flash < 0.01 { self.fx_flash = 0.0; }
 
         // Energy bridge particles
         self.update_energy_particles();

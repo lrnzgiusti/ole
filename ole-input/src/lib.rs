@@ -3,6 +3,6 @@
 mod commands;
 
 pub use commands::{
-    Command, DeckId, DelayModulation, Direction, EffectType, FilterMode, FilterType,
-    MasteringPreset, Mode, VinylPresetId,
+    Command, DeckId, DelayMode, DelayModulation, Direction, EffectType, EnergyDirection,
+    FilterMode, FilterType, GateDivision, MasteringPreset, Mode, VinylPresetId,
 };

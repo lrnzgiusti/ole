@@ -13,6 +13,36 @@ use std::f32::consts::PI;
 /// Maximum delay time in seconds
 const MAX_DELAY_SECS: f32 = 2.0;
 
+/// Delay routing mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub enum DelayMode {
+    /// Normal stereo delay (L and R independent)
+    #[default]
+    Stereo,
+    /// Ping-pong: alternates between left and right channels
+    PingPong,
+    /// Mono: same delay on both channels
+    Mono,
+}
+
+impl DelayMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Stereo => Self::PingPong,
+            Self::PingPong => Self::Mono,
+            Self::Mono => Self::Stereo,
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Stereo => "Stereo",
+            Self::PingPong => "Ping-Pong",
+            Self::Mono => "Mono",
+        }
+    }
+}
+
 /// Delay interpolation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum DelayInterpolation {
@@ -84,6 +114,8 @@ pub struct Delay {
     interpolation: DelayInterpolation,
     /// Modulation mode
     modulation: DelayModulation,
+    /// Routing mode (Stereo/PingPong/Mono)
+    mode: DelayMode,
     /// Modulation LFO phase
     mod_phase: f32,
     /// Modulation LFO phase increment
@@ -93,6 +125,10 @@ pub struct Delay {
     hp_state_r: f32,
     /// Highpass coefficient
     hp_coeff: f32,
+    /// Sidechain duck sensitivity (0.0 = off, 1.0 = full ducking)
+    duck_sensitivity: f32,
+    /// Envelope follower for sidechain ducking
+    duck_envelope: f32,
     /// Enabled state
     enabled: bool,
     /// Wet envelope for click-free enable/disable
@@ -122,11 +158,14 @@ impl Delay {
             mix: 0.5,
             interpolation: DelayInterpolation::Lagrange,
             modulation: DelayModulation::Off,
+            mode: DelayMode::Stereo,
             mod_phase: 0.0,
             mod_phase_inc: 0.0,
             hp_state_l: 0.0,
             hp_state_r: 0.0,
             hp_coeff,
+            duck_sensitivity: 0.0,
+            duck_envelope: 0.0,
             enabled: false,
             wet_target: 0.0,
             wet_current: 0.0,
@@ -183,6 +222,26 @@ impl Delay {
     pub fn set_modulation(&mut self, mode: DelayModulation) {
         self.modulation = mode;
         self.mod_phase_inc = mode.rate() / self.sample_rate;
+    }
+
+    /// Set delay routing mode
+    pub fn set_mode(&mut self, mode: DelayMode) {
+        self.mode = mode;
+    }
+
+    /// Get delay routing mode
+    pub fn mode(&self) -> DelayMode {
+        self.mode
+    }
+
+    /// Set sidechain duck sensitivity (0.0 = off, 1.0 = full ducking)
+    pub fn set_duck_sensitivity(&mut self, sensitivity: f32) {
+        self.duck_sensitivity = sensitivity.clamp(0.0, 1.0);
+    }
+
+    /// Get duck sensitivity
+    pub fn duck_sensitivity(&self) -> f32 {
+        self.duck_sensitivity
     }
 
     /// Read from delay line with interpolation
@@ -322,6 +381,7 @@ impl Effect for Delay {
     fn process(&mut self, samples: &mut [f32]) {
         // Skip processing only if fully disabled and envelope has settled
         if !self.enabled && self.wet_current < 0.0001 {
+            self.reset(); // Clear buffer so old echoes don't persist on re-enable
             return;
         }
 
@@ -359,20 +419,50 @@ impl Effect for Delay {
             let fb_l = Self::soft_saturate(hp_out_l);
             let fb_r = Self::soft_saturate(hp_out_r);
 
-            // Write to buffer (only write input when enabled, allows tails to play out)
+            // Write to buffer based on mode
             let write_idx = self.write_pos * 2;
             if self.enabled {
-                self.buffer[write_idx] = fb_l;
-                self.buffer[write_idx + 1] = fb_r;
+                match self.mode {
+                    DelayMode::Stereo => {
+                        self.buffer[write_idx] = fb_l;
+                        self.buffer[write_idx + 1] = fb_r;
+                    }
+                    DelayMode::PingPong => {
+                        // Swap L↔R in feedback path for ping-pong
+                        self.buffer[write_idx] = fb_r;
+                        self.buffer[write_idx + 1] = fb_l;
+                    }
+                    DelayMode::Mono => {
+                        let mono = (fb_l + fb_r) * 0.5;
+                        self.buffer[write_idx] = mono;
+                        self.buffer[write_idx + 1] = mono;
+                    }
+                }
             } else {
                 // When disabled, don't feed new input but let delay tails decay
                 self.buffer[write_idx] = delayed_l * self.feedback * 0.95;
                 self.buffer[write_idx + 1] = delayed_r * self.feedback * 0.95;
             }
 
-            // Mix dry and wet signals with envelope
-            let effective_mix = self.mix * self.wet_current;
-            let dry = 1.0 - effective_mix;
+            // Sidechain ducking: envelope follower on dry signal
+            let duck_amount = if self.duck_sensitivity > 0.0 {
+                let dry_level = (frame[0].abs() + frame[1].abs()) * 0.5;
+                // Fast attack (~1ms), slow release (~50ms)
+                let attack = 0.01_f32;
+                let release = 0.9995_f32;
+                if dry_level > self.duck_envelope {
+                    self.duck_envelope = self.duck_envelope * attack + dry_level * (1.0 - attack);
+                } else {
+                    self.duck_envelope *= release;
+                }
+                1.0 - (self.duck_envelope * self.duck_sensitivity).min(1.0)
+            } else {
+                1.0
+            };
+
+            // Mix dry and wet signals with envelope and ducking
+            let effective_mix = self.mix * self.wet_current * duck_amount;
+            let dry = 1.0 - self.mix * self.wet_current; // dry doesn't duck
             frame[0] = frame[0] * dry + delayed_l * effective_mix;
             frame[1] = frame[1] * dry + delayed_r * effective_mix;
 
@@ -388,6 +478,7 @@ impl Effect for Delay {
         self.hp_state_l = 0.0;
         self.hp_state_r = 0.0;
         self.mod_phase = 0.0;
+        self.duck_envelope = 0.0;
     }
 
     fn is_enabled(&self) -> bool {
